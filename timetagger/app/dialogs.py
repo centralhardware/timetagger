@@ -394,7 +394,6 @@ class MenuDialog(BaseDialog):
         container = self.maindiv
         for icon, show, notify, title, func in [
             (None, True, False, "External pages", None),
-            ("\uf015", True, False, "Homepage", "/"),
             (
                 "\uf059",
                 True,
