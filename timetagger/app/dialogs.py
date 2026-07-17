@@ -311,32 +311,6 @@ class BaseDialog:
         self.allow_blur = False
 
 
-class SandboxInfoDialog(BaseDialog):
-    """Dialog to show as the sandbox starts up."""
-
-    EXIT_ON_CLICK_OUTSIDE = True
-
-    def open(self):
-        """Show/open the dialog ."""
-        html = """
-            <h1>Sandbox
-                <button type='button'><i class='fas'>\uf00d</i></button>
-            </h1>
-            <p>
-            The TimeTagger sandbox starts without any records. You can play around
-            or try importing records. The data is not synced to the server and
-            will be lost as soon as you leave this page.
-            </p><p>
-            <i>Hit Escape or click anywhere outside of this dialog to close it.</i>
-            </p>
-        """
-        self.maindiv.innerHTML = html
-
-        close_but = self.maindiv.children[0].children[-1]
-        close_but.onclick = self.close
-        super().open(None)
-
-
 class NotificationDialog(BaseDialog):
     """Dialog to show a message to the user."""
 
@@ -388,9 +362,7 @@ class MenuDialog(BaseDialog):
         is_installable = window.pwa and window.pwa.deferred_prompt
 
         # Display sensible text in "header"
-        if window.store.__name__.startswith("Sandbox"):
-            text = "This is the Sandbox"
-        elif window.store.get_auth:
+        if window.store.get_auth:
             auth = window.store.get_auth()
             if auth:
                 text = "Signed in as " + auth.username
@@ -3580,13 +3552,6 @@ class ImportDialog(BaseDialog):
         self._input_element.ondragexit = self._on_drop_stop
         self._input_element.ondragover = self._on_drop_over
         self._input_element.ondrop = self._on_drop
-
-        if not window.store.__name__.startswith("Sandbox"):
-            maintext = self.maindiv.children[2]
-            maintext.innerHTML += """
-                Consider importing into the
-                <a target='new' href='sandbox'>Sandbox</a> first.
-                """
 
         self._analysis_out = self.maindiv.children[-2]
 

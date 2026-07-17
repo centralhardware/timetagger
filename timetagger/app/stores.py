@@ -1008,21 +1008,3 @@ class ConnectedDataStore(BaseDataStore):
                 if ob.settings or ob.records:
                     if self.state != "warning":
                         self._set_state("ok")
-
-
-class SandboxDataStore(BaseDataStore):
-    """A data store that is empty. Users can import records here and
-    play around without breaking anything.
-    """
-
-    async def _sync(self):
-        """Emulate a sync action."""
-        for kind in ["settings", "records"]:
-            items = self._to_push[kind].values()
-            self._to_push[kind] = {}
-            if len(items) > 0:
-                await tools.sleepms(200)
-                for item in items:
-                    item.st = dt.now()
-                self[kind]._put_received(*items)
-                self._set_state("ok")

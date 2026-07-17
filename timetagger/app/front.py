@@ -1158,10 +1158,7 @@ class TopWidget(Widget):
             self._draw_button(ctx, x + 30, y_balloon, None, 30, text, "", "", options)
 
     def _draw_menu_button(self, ctx, x1, y1, x2, y2):
-        if window.store.__name__.startswith("Sandbox"):
-            text = "Sandbox"
-        else:
-            text = ""
+        text = ""
 
         sync_radius = 9
         yoffset = -6 if len(text) else 0
@@ -1373,7 +1370,7 @@ class TopWidget(Widget):
             x -= dx
 
             if dt.time_since_app_loaded() > 3 and window.store.records.put_count == 0:
-                # Help new users find the record button (can test this in the sandbox)
+                # Help new users find the record button
                 x_balloon = x + 0.5 * dx
                 ctx.strokeStyle = COLORS.acc_clr
                 ctx.lineWidth = 3
