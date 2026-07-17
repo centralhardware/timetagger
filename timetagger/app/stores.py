@@ -127,7 +127,9 @@ _min_heap_bin_size = 2**17  # about 1.5 day
 
 # ----- COMMON PART (don't change this comment)
 
-RECORD_SPEC = dict(key=to_str, mt=to_int, t1=to_int, t2=to_int, ds=to_str)
+RECORD_SPEC = dict(
+    key=to_str, mt=to_int, t1=to_int, t2=to_int, ds=to_str, deleted=to_int
+)
 RECORD_REQ = ["key", "mt", "t1", "t2"]
 
 SETTING_SPEC = dict(key=to_str, mt=to_int, value=to_jsonable)
@@ -161,13 +163,13 @@ def generate_uid():
 
 
 def is_hidden(item):
-    """Get whether the given item is hidden."""
-    return item.get("ds", "").startswith("HIDDEN")
+    """Get whether the given item is hidden (i.e. deleted)."""
+    return bool(item.get("deleted", 0))
 
 
 def make_hidden(item):
-    """Mark the given item as hidden."""
-    item.ds = "HIDDEN " + item.get("ds", "").split("HIDDEN")[-1].strip()
+    """Mark the given item as hidden (i.e. deleted)."""
+    item.deleted = 1
 
 
 # %% Sub stores
@@ -386,6 +388,7 @@ class RecordStore(BaseStore):
             t1=dt.to_time_int(t1),
             t2=dt.to_time_int(t2),
             ds=to_str(ds),
+            deleted=0,
         )
 
     def tags_from_record(self, record):

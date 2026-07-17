@@ -761,9 +761,9 @@ def test_records_get_hidden_filter():
             dict(key="r1", mt=110, t1=100, t2=150, ds="#visible1"),
             dict(key="r2", mt=110, t1=200, t2=250, ds="#visible2"),
             dict(key="r3", mt=110, t1=300, t2=350, ds="#visible3"),
-            dict(key="r4", mt=110, t1=400, t2=450, ds="HIDDEN #deleted1"),
-            dict(key="r5", mt=110, t1=500, t2=550, ds="HIDDEN #deleted2"),
-            dict(key="r6", mt=110, t1=600, t2=650, ds="HIDDEN #deleted3"),
+            dict(key="r4", mt=110, t1=400, t2=450, ds="#deleted1", deleted=1),
+            dict(key="r5", mt=110, t1=500, t2=550, ds="#deleted2", deleted=1),
+            dict(key="r6", mt=110, t1=600, t2=650, ds="#deleted3", deleted=1),
         ]
         r = p.put(
             "http://localhost/api/v2/records",
@@ -1200,15 +1200,16 @@ def test_records_get_combined_filters():
             dict(key="r4", mt=110, t1=now - 1000, t2=now - 1000, ds="#work"),
             dict(key="r5", mt=110, t1=now - 2000, t2=now - 2000, ds="#work #urgent"),
             # Hidden, stopped, work
-            dict(key="r6", mt=110, t1=400, t2=450, ds="HIDDEN #work"),
-            dict(key="r7", mt=110, t1=500, t2=550, ds="HIDDEN #work #urgent"),
+            dict(key="r6", mt=110, t1=400, t2=450, ds="#work", deleted=1),
+            dict(key="r7", mt=110, t1=500, t2=550, ds="#work #urgent", deleted=1),
             # Hidden, running, work
             dict(
                 key="r8",
                 mt=110,
                 t1=now - 3000,
                 t2=now - 3000,
-                ds="HIDDEN #work",
+                ds="#work",
+                deleted=1,
             ),
             # Visible, stopped, personal
             dict(key="r9", mt=110, t1=600, t2=650, ds="#personal"),
@@ -1216,11 +1217,11 @@ def test_records_get_combined_filters():
             # Visible, running, personal
             dict(key="r11", mt=110, t1=now - 4000, t2=now - 4000, ds="#personal"),
             # Hidden, stopped, personal
-            dict(key="r12", mt=110, t1=800, t2=850, ds="HIDDEN #personal"),
+            dict(key="r12", mt=110, t1=800, t2=850, ds="#personal", deleted=1),
             # No tags
             dict(key="r13", mt=110, t1=900, t2=950, ds="no tags"),
             dict(key="r14", mt=110, t1=now - 5000, t2=now - 5000, ds="no tags running"),
-            dict(key="r15", mt=110, t1=1000, t2=1050, ds="HIDDEN no tags"),
+            dict(key="r15", mt=110, t1=1000, t2=1050, ds="no tags", deleted=1),
         ]
         r = p.put(
             "http://localhost/api/v2/records",

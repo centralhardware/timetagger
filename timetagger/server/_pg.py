@@ -74,10 +74,21 @@ async def close_pool():
         await pool.close()
 
 
-# %% Query translation (itemdb/SQLite dialect -> PostgreSQL)
+# %% Table schema
 
-# json_extract(_ob, '$.field') -> (_ob->>'field')
-_JSON_EXTRACT = re.compile(r"json_extract\(\s*_ob\s*,\s*'\$\.([A-Za-z0-9_]+)'\s*\)")
+# The columns that make up each item, in addition to the "user" column. Items
+# are stored/reconstructed one column per field (no json blob); "value" columns
+# are jsonb and hold arbitrary JSON. "key" is the per-user primary key. This is
+# the single source of truth in code; the physical schema is created by the
+# migrations (see server/_migrations.py) and must stay in sync.
+_TABLES = {
+    "records": ["key", "st", "mt", "t1", "t2", "ds", "deleted"],
+    "settings": ["key", "st", "mt", "value"],
+    "userinfo": ["key", "st", "mt", "value"],
+}
+
+
+# %% Query translation (itemdb/SQLite dialect -> PostgreSQL)
 
 
 def _translate_where(query):
@@ -86,8 +97,7 @@ def _translate_where(query):
     The user-supplied ``?`` placeholders are renumbered to ``$2, $3, ...``
     ($1 is reserved for the user filter that the caller prepends).
     """
-    q = _JSON_EXTRACT.sub(r"(_ob->>'\1')", query)
-    q = q.replace("==", "=")
+    q = query.replace("==", "=")
     counter = itertools.count(2)
     q = re.sub(r"\?", lambda m: f"${next(counter)}", q)
     return q
@@ -108,8 +118,6 @@ class PostgresItemDB:
     def __init__(self, username):
         self._user = username
         self._mtime = -1.0
-        self._indices = {}  # table -> list of indexed field names
-        self._unique = {}  # table -> the unique field name (or None)
         self._tx_conn = None  # connection while inside a transaction
         self._tx = None
 
@@ -159,23 +167,15 @@ class PostgresItemDB:
     # -- schema
 
     async def ensure_table(self, table_name, *indices):
-        """Register the indexed columns for a table and sync mtime.
+        """Sync mtime for a table.
 
         The schema itself is created centrally by the migrations (see
-        ``server/_migrations.py``); this only records which fields are
-        indexed/unique so that ``put()`` knows how to write rows.
-
-        Index specs prefixed with ``!`` are mandatory/unique and are part
-        of the primary key (together with the ``user`` column).
+        ``server/_migrations.py``) and the columns are described by
+        ``_TABLES``; the ``indices`` argument is accepted for API
+        compatibility but ignored.
         """
-        if not all(isinstance(x, str) for x in indices):
-            raise TypeError("Indices must be str")
-
-        all_fields = [x.lstrip("!") for x in indices]
-        unique_fields = [x[1:] for x in indices if x.startswith("!")]
-        self._indices[table_name] = all_fields
-        self._unique[table_name] = unique_fields[0] if unique_fields else None
-
+        if table_name not in _TABLES:
+            raise KeyError(f"Unknown table {table_name!r}.")
         # Keep mtime in sync with what is currently in the table.
         await self._refresh_mtime(table_name)
         return self
@@ -191,22 +191,42 @@ class PostgresItemDB:
 
     # -- reading
 
+    def _columns(self, table_name):
+        columns = _TABLES.get(table_name)
+        if columns is None:
+            raise KeyError(f"Unknown table {table_name!r}.")
+        return columns
+
+    @staticmethod
+    def _row_to_item(columns, row):
+        """Reconstruct an item dict from a row, dropping absent (NULL) fields."""
+        item = {}
+        for col in columns:
+            val = row[col]
+            if val is not None:
+                item[col] = val
+        return item
+
     async def select(self, table_name, query, *save_args):
+        columns = self._columns(table_name)
+        collist = ", ".join(f'"{c}"' for c in columns)
         where = _translate_where(query)
-        sql = f"SELECT _ob FROM {table_name} " f'WHERE ("user" = $1) AND ({where})'
+        sql = f'SELECT {collist} FROM {table_name} WHERE ("user" = $1) AND ({where})'
         async with self._acquire() as conn:
             rows = await conn.fetch(sql, self._user, *save_args)
-        return [row["_ob"] for row in rows]
+        return [self._row_to_item(columns, row) for row in rows]
 
     async def select_one(self, table_name, query, *save_args):
         items = await self.select(table_name, query, *save_args)
         return items[0] if items else None
 
     async def select_all(self, table_name):
-        sql = f'SELECT _ob FROM {table_name} WHERE "user" = $1'
+        columns = self._columns(table_name)
+        collist = ", ".join(f'"{c}"' for c in columns)
+        sql = f'SELECT {collist} FROM {table_name} WHERE "user" = $1'
         async with self._acquire() as conn:
             rows = await conn.fetch(sql, self._user)
-        return [row["_ob"] for row in rows]
+        return [self._row_to_item(columns, row) for row in rows]
 
     # -- writing
 
@@ -214,34 +234,28 @@ class PostgresItemDB:
         if self._tx_conn is None:
             raise IOError("Can only use put() within a transaction.")
 
-        fields = self._indices.get(table_name)
-        if fields is None:
-            raise KeyError(f"Unknown table {table_name!r}; call ensure_table() first.")
-        unique = self._unique.get(table_name)
+        columns = self._columns(table_name)
 
         for item in items:
             if not isinstance(item, dict):
                 raise TypeError("Expecting each item to be a dict")
-            if unique and unique not in item:
-                raise IndexError(f"Item does not have required field {unique!r}")
+            if "key" not in item:
+                raise IndexError("Item does not have required field 'key'")
 
-            cols = ['"user"', "_ob"]
-            values = [self._user, item]
-            for field in fields:
-                if field in item:
-                    cols.append(f'"{field}"')
-                    values.append(item[field])
-
+            # Only write the columns that the item actually provides, so that
+            # partial updates leave other columns untouched.
+            present = [c for c in columns if c in item]
+            cols = ['"user"'] + [f'"{c}"' for c in present]
+            values = [self._user] + [item[c] for c in present]
             placeholders = ", ".join(f"${i + 1}" for i in range(len(values)))
             update_cols = ", ".join(
-                f"{c} = EXCLUDED.{c}"
-                for c in cols
-                if c not in ('"user"', f'"{unique}"')
+                f'"{c}" = EXCLUDED."{c}"' for c in present if c != "key"
             )
+            conflict = f"DO UPDATE SET {update_cols}" if update_cols else "DO NOTHING"
             sql = (
                 f"INSERT INTO {table_name} ({', '.join(cols)}) "
                 f"VALUES ({placeholders}) "
-                f'ON CONFLICT ("user", "{unique}") DO UPDATE SET {update_cols}'
+                f'ON CONFLICT ("user", "key") {conflict}'
             )
             await self._tx_conn.execute(sql, *values)
 

@@ -46,7 +46,9 @@ def to_jsonable(x):
 
 # ----- COMMON PART (don't change this comment)
 
-RECORD_SPEC = dict(key=to_str, mt=to_int, t1=to_int, t2=to_int, ds=to_str)
+RECORD_SPEC = dict(
+    key=to_str, mt=to_int, t1=to_int, t2=to_int, ds=to_str, deleted=to_int
+)
 RECORD_REQ = ["key", "mt", "t1", "t2"]
 
 SETTING_SPEC = dict(key=to_str, mt=to_int, value=to_jsonable)
@@ -403,18 +405,16 @@ async def get_records(request, auth_info, db):
     safe_params = []
     query_parts.append(f"(t2 >= {tr1} AND t1 <= {tr2}) OR (t1 == t2 AND t1 <= {tr2})")
     for tag in tags:
-        query_parts.append(
-            "json_extract(_ob, '$.ds') LIKE ? ESCAPE '\\' OR json_extract(_ob, '$.ds') LIKE ? ESCAPE '\\'"
-        )
+        query_parts.append("ds LIKE ? ESCAPE '\\' OR ds LIKE ? ESCAPE '\\'")
         safe_params += [f"%#{tag} %", f"%#{tag}"]
     if running is True:
         query_parts.append("t1 == t2")
     if running is False:
         query_parts.append("t1 != t2")
     if hidden is True:
-        query_parts.append("json_extract(_ob, '$.ds') LIKE 'HIDDEN%'")
+        query_parts.append("deleted == 1")
     if hidden is False:
-        query_parts.append("json_extract(_ob, '$.ds') NOT LIKE 'HIDDEN%'")
+        query_parts.append("deleted == 0")
     query = " AND ".join(f"({part})" for part in query_parts)
 
     # Collect records

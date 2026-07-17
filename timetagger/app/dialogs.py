@@ -1841,7 +1841,7 @@ class RecordDialog(BaseDialog):
 
     def _delete2(self):
         record = self._record
-        window.stores.make_hidden(record)  # Sets the description
+        window.stores.make_hidden(record)  # Marks the record as deleted
         record.t2 = record.t1 + 1  # Set duration to 1s (t1 == t2 means running)
         window.store.records.put(record)
         self.close(record)

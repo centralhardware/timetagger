@@ -66,7 +66,7 @@ def test_record_store1():
 
     # Now remove all records
     for record in rs.get_records(0, 1e15).values():
-        rs.put(record.clone(ds="HIDDEN"))
+        rs.put(record.clone(deleted=1))
 
     # Verify that records are gone from the heap
     assert len(rs._heap) == 1
@@ -165,7 +165,7 @@ def test_record_spanning_multiple_bins():
 
     # Cleanup
     for record in rs.get_records(0, 1e15).values():
-        rs.put(record.clone(ds="HIDDEN"))
+        rs.put(record.clone(deleted=1))
 
     # Verify that all is gone
     assert len(rs._heap) == 1
@@ -309,11 +309,12 @@ def test_deleting_records():
     assert len(rs._items.keys()) == 1
     assert len(rs.get_records(0, 1e15)) == 1
 
-    # Mark deleted
+    # Mark deleted (the description is left untouched)
     make_hidden(r)
-    assert r.ds == "HIDDEN #p1"
+    assert r.deleted == 1
+    assert r.ds == "#p1"
     make_hidden(r)
-    assert r.ds == "HIDDEN #p1"
+    assert r.deleted == 1
 
     # Update it
     rs.put(r)
@@ -326,7 +327,7 @@ def test_deleting_records():
     assert len(rs.get_records(0, 1e15)) == 0
 
     # Revive it
-    r.ds = "#p1"
+    r.deleted = 0
     rs.put(r)
     assert len(rs._items.keys()) == 1
     assert len(rs.get_records(0, 1e15)) == 1
