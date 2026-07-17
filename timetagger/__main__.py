@@ -40,6 +40,7 @@ from timetagger.server import (
     enable_service_worker,
 )
 from timetagger.server import _credentials
+from timetagger.server._migrations import migrate
 
 
 def _run_user_admin(cmd, args):
@@ -47,6 +48,7 @@ def _run_user_admin(cmd, args):
 
     async def _run():
         try:
+            await migrate()
             if cmd in ("user-list", "users"):
                 users = await _credentials.list_users()
                 print("\n".join(users) if users else "(no users)")
@@ -229,9 +231,6 @@ async def get_webtoken_usernamepassword(request, auth_info):
     in PostgreSQL and managed via the `python -m timetagger user-*` CLI.
     See `get_webtoken_unsafe()` for details.
     """
-    # Seed any legacy env credentials into the DB (once, no overwrite).
-    await _ensure_credentials_seeded()
-
     # Get credentials from request
     user = auth_info.get("username", "").strip()
     pw = auth_info.get("password", "").strip()
@@ -241,19 +240,6 @@ async def get_webtoken_usernamepassword(request, auth_info):
         return 200, {}, dict(token=token)
     else:
         return 403, {}, "Invalid credentials"
-
-
-_credentials_seeded = False
-
-
-async def _ensure_credentials_seeded():
-    """One-time migration: copy `config.credentials` (env) into the DB table."""
-    global _credentials_seeded
-    if _credentials_seeded:
-        return
-    _credentials_seeded = True
-    if config.credentials.strip():
-        await _credentials.seed_from_env_credentials(config.credentials)
 
 
 async def get_webtoken_localhost(request, auth_info):
@@ -296,7 +282,14 @@ def load_trusted_proxies():
 TRUSTED_PROXIES = load_trusted_proxies()
 
 
+async def _apply_migrations_and_close():
+    await migrate()
+    await _credentials.close()  # closes the pool for this throwaway loop
+
+
 if __name__ == "__main__":
+    # Apply pending database migrations before the server starts serving.
+    asyncio.run(_apply_migrations_and_close())
     asgineer.run(
         "timetagger.__main__:main_handler", "uvicorn", config.bind, log_level="warning"
     )

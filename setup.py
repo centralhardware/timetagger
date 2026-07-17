@@ -30,7 +30,8 @@ setup(
     version=VERSION,
     packages=find_packages(exclude=["tests", "tests.*", "examples", "examples.*"]),
     package_data={
-        f"timetagger.{x}": ["*"] for x in ["common", "images", "app", "pages"]
+        **{f"timetagger.{x}": ["*"] for x in ["common", "images", "app", "pages"]},
+        "timetagger.server.migrations": ["*.sql"],
     },
     python_requires=">=3.6.0",
     install_requires=runtime_deps,

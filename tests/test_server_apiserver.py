@@ -17,6 +17,7 @@ from timetagger.server import (
     get_pool,
 )
 from timetagger.server._apiserver import INDICES
+from timetagger.server._migrations import migrate
 
 USER = "test"
 HEADERS = {}
@@ -33,6 +34,7 @@ def get_webtoken_unsafe_sync(username, reset=False):
 
 
 async def _clear_test_db():
+    await migrate()
     db = await PostgresItemDB.open(USER)
     for table in TABLES:
         await db.ensure_table(table, *INDICES[table])

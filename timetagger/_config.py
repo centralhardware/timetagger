@@ -35,10 +35,6 @@ class Config:
       a key is generated and persisted to `datadir/jwt.key`.
     * `log_level (str)`: the log level for timetagger and asgineer
       (not the asgi server). Default "info".
-    * `credentials (str)`: login credentials for one or more users, in the
-      form "user1:hash1,user2:hash2" where each hash is a salted hash (BCrypt)
-      of the password. Used in the default startup script ``__main__.py``.
-      You can generate credentials with https://timetagger.app/cred.
     * `proxy_auth_enabled (bool)`: enables authentication from a reverse proxy
       (for example Authelia). Default "False".
     * `proxy_auth_trusted (str)`: list of trusted reverse proxy IPs with or without CIDR, in the
@@ -66,7 +62,6 @@ class Config:
         ("db_uri", str, ""),
         ("jwt_key", str, ""),
         ("log_level", str, "info"),
-        ("credentials", str, ""),
         ("proxy_auth_enabled", to_bool, False),
         ("proxy_auth_trusted", str, "127.0.0.1"),
         ("proxy_auth_header", str, "X-Remote-User"),

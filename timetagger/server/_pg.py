@@ -28,12 +28,6 @@ from .. import config
 # may use several loops, so we keep one pool per running loop.
 _pools = {}  # event loop -> asyncpg pool
 
-# Tables for which we already ran the DDL (per process). Avoids running
-# CREATE TABLE / CREATE INDEX on every single request. The tables are
-# physically shared, so this is safe across loops/pools.
-_ensured_tables = set()
-
-
 async def _init_connection(conn):
     # Return jsonb values as Python objects (and accept Python objects).
     await conn.set_type_codec(
@@ -83,16 +77,6 @@ async def close_pool():
 
 # json_extract(_ob, '$.field') -> (_ob->>'field')
 _JSON_EXTRACT = re.compile(r"json_extract\(\s*_ob\s*,\s*'\$\.([A-Za-z0-9_]+)'\s*\)")
-
-# Column types for the indexed fields that TimeTagger uses. Anything not
-# listed defaults to text.
-_FIELD_TYPES = {
-    "key": "text",
-    "st": "double precision",
-    "mt": "double precision",
-    "t1": "bigint",
-    "t2": "bigint",
-}
 
 
 def _translate_where(query):
@@ -174,10 +158,14 @@ class PostgresItemDB:
     # -- schema
 
     async def ensure_table(self, table_name, *indices):
-        """Ensure the table exists and has the given indexed columns.
+        """Register the indexed columns for a table and sync mtime.
 
-        Index specs prefixed with ``!`` are mandatory/unique and become
-        part of the primary key (together with the ``user`` column).
+        The schema itself is created centrally by the migrations (see
+        ``server/_migrations.py``); this only records which fields are
+        indexed/unique so that ``put()`` knows how to write rows.
+
+        Index specs prefixed with ``!`` are mandatory/unique and are part
+        of the primary key (together with the ``user`` column).
         """
         if not all(isinstance(x, str) for x in indices):
             raise TypeError("Indices must be str")
@@ -187,33 +175,9 @@ class PostgresItemDB:
         self._indices[table_name] = all_fields
         self._unique[table_name] = unique_fields[0] if unique_fields else None
 
-        if table_name not in _ensured_tables:
-            await self._create_table(table_name, all_fields, unique_fields)
-            _ensured_tables.add(table_name)
-
         # Keep mtime in sync with what is currently in the table.
         await self._refresh_mtime(table_name)
         return self
-
-    async def _create_table(self, table_name, all_fields, unique_fields):
-        cols = ['"user" text NOT NULL', "_ob jsonb NOT NULL"]
-        for field in all_fields:
-            col_type = _FIELD_TYPES.get(field, "text")
-            not_null = " NOT NULL" if field in unique_fields else ""
-            cols.append(f'"{field}" {col_type}{not_null}')
-        pk_cols = ", ".join(['"user"'] + [f'"{u}"' for u in unique_fields])
-        ddl = (
-            f"CREATE TABLE IF NOT EXISTS {table_name} "
-            f"({', '.join(cols)}, PRIMARY KEY ({pk_cols}))"
-        )
-        async with self._acquire() as conn:
-            await conn.execute(ddl)
-            for field in all_fields:
-                if field not in unique_fields:
-                    await conn.execute(
-                        f"CREATE INDEX IF NOT EXISTS "
-                        f'idx_{table_name}_{field} ON {table_name} ("{field}")'
-                    )
 
     async def _refresh_mtime(self, table_name):
         async with self._acquire() as conn:

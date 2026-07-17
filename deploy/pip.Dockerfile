@@ -9,7 +9,6 @@
 # mypaas.url = https://test1.timetagger.app
 # mypaas.volume = /root/_timetagger:/root/_timetagger
 # mypaas.maxmem = 256m
-# mypaas.env = TIMETAGGER_CREDENTIALS
 
 FROM python:3.13-slim-bookworm
 
