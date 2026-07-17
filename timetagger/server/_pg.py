@@ -28,6 +28,7 @@ from .. import config
 # may use several loops, so we keep one pool per running loop.
 _pools = {}  # event loop -> asyncpg pool
 
+
 async def _init_connection(conn):
     # Return jsonb values as Python objects (and accept Python objects).
     await conn.set_type_codec(
