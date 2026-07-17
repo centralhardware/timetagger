@@ -4,7 +4,6 @@
 #
 # mypaas.service = timetagger.test1
 # mypaas.url = https://test1.timetagger.app
-# mypaas.volume = /root/_timetagger:/root/_timetagger
 # mypaas.maxmem = 256m
 
 FROM ghcr.io/centralhardware/timetagger

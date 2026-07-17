@@ -10,7 +10,6 @@ def test_config():
     default_bind = "127.0.0.1:8080"
     set_config([], {})
     assert config.bind == default_bind
-    assert config.datadir == "~/_timetagger"
 
     # argv
     set_config(["--bind=localhost:8080"], {})

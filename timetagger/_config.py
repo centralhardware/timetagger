@@ -24,15 +24,14 @@ class Config:
     """Object that holds config values.
 
     * `bind (str)`: the address and port to bind on. Default "127.0.0.1:8080".
-    * `datadir (str)`: the directory used to persist the JWT key (see
-      `jwt_key`). Default "~/_timetagger". Not needed when `jwt_key` is set.
     * `db_uri (str)`: the PostgreSQL connection string, e.g.
       "postgresql://user:pass@host:5432/timetagger". This is REQUIRED:
       TimeTagger stores all user data in this database. There is no SQLite
       fallback.
-    * `jwt_key (str)`: optional secret used to sign JWT auth tokens. When set,
-      no state is written to disk (fully stateless deployment). When empty,
-      a key is generated and persisted to `datadir/jwt.key`.
+    * `jwt_key (str)`: secret used to sign JWT auth tokens. TimeTagger never
+      writes to disk, so when this is empty an ephemeral key is generated in
+      memory and all sessions are invalidated on restart. Set it to a long
+      random secret in production.
     * `log_level (str)`: the log level for timetagger and asgineer
       (not the asgi server). Default "info".
     * `proxy_auth_enabled (bool)`: enables authentication from a reverse proxy
@@ -46,19 +45,18 @@ class Config:
     The values can be configured using CLI arguments and environment variables.
     For CLI arguments, the following formats are supported:
     ```
-    python -m timetagger --datadir=~/timedata
-    python -m timetagger --datadir ~/timedata
+    python -m timetagger --bind=0.0.0.0:80
+    python -m timetagger --bind 0.0.0.0:80
     ```
 
     For environment variable, the key is uppercase and prefixed:
     ```
-    TIMETAGGER_DATADIR=~/timedata
+    TIMETAGGER_BIND=0.0.0.0:80
     ```
     """
 
     _ITEMS = [
         ("bind", str, "127.0.0.1:8080"),
-        ("datadir", str, "~/_timetagger"),
         ("db_uri", str, ""),
         ("jwt_key", str, ""),
         ("log_level", str, "info"),

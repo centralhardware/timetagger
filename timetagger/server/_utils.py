@@ -2,7 +2,6 @@
 Misc utils.
 """
 
-import os
 import json
 import logging
 import secrets
@@ -11,12 +10,6 @@ from base64 import urlsafe_b64decode
 import jwt
 
 from .. import config
-
-# Init directory paths. The datadir is only used to persist the JWT key
-# (all user data lives in PostgreSQL, see server/_pg.py).
-ROOT_TT_DIR = os.path.expanduser(config.datadir)
-if not os.path.isdir(ROOT_TT_DIR):
-    os.makedirs(ROOT_TT_DIR)
 
 # Init logger
 logger = logging.getLogger("asgineer")
@@ -27,25 +20,22 @@ logger.setLevel(config.log_level.upper())
 
 
 def _load_jwt_key():
-    """Load the secret JWT key.
+    """Determine the secret JWT key.
 
-    If `config.jwt_key` (env TIMETAGGER_JWT_KEY) is set, it is used as-is,
-    keeping the deployment fully stateless. Otherwise the key is loaded from
-    `datadir/jwt.key`, and created if it does not exist yet. Note that
-    changing/removing the key invalidates all previously issued tokens.
+    TimeTagger never writes to disk: all user data lives in PostgreSQL. If
+    `config.jwt_key` (env TIMETAGGER_JWT_KEY) is set, it is used as-is. If it
+    is not set, an ephemeral key is generated in memory, which means all
+    issued tokens (i.e. logged-in sessions) become invalid when the server
+    restarts. Set TIMETAGGER_JWT_KEY to a long random secret in production.
     """
     if config.jwt_key.strip():
         return config.jwt_key.strip()
-    filename = os.path.join(ROOT_TT_DIR, "jwt.key")
-    secret = ""
-    if os.path.isfile(filename):
-        with open(filename, "rb") as f:
-            secret = f.read().decode().strip()
-    if not secret:
-        secret = secrets.token_urlsafe(32)
-        with open(filename, "wb") as f:
-            f.write(secret.encode())
-    return secret
+    logger.warning(
+        "TIMETAGGER_JWT_KEY is not set; using an ephemeral key. All sessions "
+        "will be invalidated when the server restarts. Set TIMETAGGER_JWT_KEY "
+        "to a long random secret to keep sessions across restarts."
+    )
+    return secrets.token_urlsafe(32)
 
 
 JWT_KEY = _load_jwt_key()
