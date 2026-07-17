@@ -14,12 +14,14 @@ services:
   timetagger:
     image: ghcr.io/centralhardware/timetagger:latest
     ports:
-      - "80:80"
+      # The image runs unprivileged (UID 1000), so it binds a non-privileged
+      # port inside the container; map it to whatever host port you like.
+      - "80:8080"
     depends_on:
       db:
         condition: service_healthy
     environment:
-      - TIMETAGGER_BIND=0.0.0.0:80
+      - TIMETAGGER_BIND=0.0.0.0:8080
       - TIMETAGGER_DB_URI=postgresql://timetagger:timetagger@db:5432/timetagger
       - TIMETAGGER_JWT_KEY=change-me-to-a-long-random-secret
       - TIMETAGGER_LOG_LEVEL=info
