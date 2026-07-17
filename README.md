@@ -34,8 +34,10 @@ following features:
 The server runs on async Python using
 [uvicorn](https://github.com/encode/uvicorn) and
 [asgineer](https://github.com/almarklein/asgineer) - which is fun and bloody fast.
-It uses SQLite via [itemdb](https://github.com/almarklein/itemdb) to
-store the data, making it easy to deploy.
+It uses [PostgreSQL](https://www.postgresql.org/) (via
+[asyncpg](https://github.com/MagicStack/asyncpg)) to store all data,
+including the login credentials. The connection string is provided via
+`TIMETAGGER_DB_URI` (see below).
 
 The client is a mix of HTML, CSS, Markdown, and ... Python!
 [PScript](https://github.com/flexxui/pscript) is used to compile the
@@ -52,6 +54,14 @@ TimeTagger is implemented as a Python library that requires Python 3.6 or higher
 pip install -U timetagger
 
 # Run
+python -m timetagger
+```
+
+TimeTagger requires a PostgreSQL database. Point it at your database with
+`TIMETAGGER_DB_URI` (the tables are created automatically on first use):
+
+```
+export TIMETAGGER_DB_URI='postgresql://user:pass@localhost:5432/timetagger'
 python -m timetagger
 ```
 
@@ -72,23 +82,28 @@ See [this article](https://timetagger.app/articles/selfhost2/) for more informat
 
 ### Authentication using credentials
 
-If you want multiple users, or if the server is not on localhost, you
-may want to provide the server with user credentials using an
-environment variable or a command line arg (see the
-[docs on config](https://timetagger.readthedocs.io/en/latest/libapi/)).
+If you want multiple users, or if the server is not on localhost, you can
+manage user credentials directly in the database using the CLI. Passwords
+are hashed with BCrypt before being stored:
 
 ```
-# Using command-line args
-python -m timetagger --credentials=test:$2a$08$0CD1NFiIbancwWsu3se1v.RNR/b7YeZd71yg3cZ/3whGlyU6Iny5i
+# Add or update a user (also works to change a password)
+python -m timetagger user-add alice s3cr3t-password
 
-# Using environment variables
-export TIMETAGGER_CREDENTIALS='test:$2a$08$0CD1NFiIbancwWsu3se1v.RNR/b7YeZd71yg3cZ/3whGlyU6Iny5i'
-python -m timetagger
+# List users
+python -m timetagger user-list
+
+# Remove a user
+python -m timetagger user-remove alice
 ```
 
-The credentials take the form "<username>:<hash>", where the hash is a
-(salted) BCrypt hash of the password. You can generate credentials using
-e.g. https://timetagger.app/cred.
+For zero-downtime migration, the legacy `TIMETAGGER_CREDENTIALS` env var
+(format "<username>:<bcrypt-hash>") is still honored: any users listed there
+are seeded into the database on first login (without overwriting existing
+rows). New setups should use the `user-*` CLI commands instead.
+
+To run fully stateless (no volume), also set `TIMETAGGER_JWT_KEY` to a long
+random secret; otherwise the JWT signing key is persisted to `datadir/jwt.key`.
 
 
 ### Authentication using a reverse proxy

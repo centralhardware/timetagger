@@ -8,4 +8,4 @@
 # mypaas.maxmem = 256m
 # mypaas.env = TIMETAGGER_CREDENTIALS
 
-FROM ghcr.io/almarklein/timetagger
+FROM ghcr.io/centralhardware/timetagger

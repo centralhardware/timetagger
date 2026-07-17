@@ -1,6 +1,6 @@
 # flake8: noqa
 
-from ._utils import user2filename, filename2user
+from ._pg import PostgresItemDB, get_pool, close_pool
 from ._apiserver import (
     authenticate,
     AuthException,

@@ -16,7 +16,7 @@ FROM python:3.13-slim-bookworm
 # Install dependencies (including optional ones that make uvicorn faster)
 RUN pip --no-cache-dir install pip --upgrade && pip --no-cache-dir install \
     uvicorn uvloop httptools \
-    fastuaparser itemdb>=1.1.1 asgineer requests \
+    fastuaparser asyncpg>=0.30.0 asgineer requests \
     jinja2 markdown pscript \
     pyjwt cryptography
 

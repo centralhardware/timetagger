@@ -24,8 +24,15 @@ class Config:
     """Object that holds config values.
 
     * `bind (str)`: the address and port to bind on. Default "127.0.0.1:8080".
-    * `datadir (str)`: the directory to store data. Default "~/_timetagger".
-      The user db's are stored in `datadir/users`.
+    * `datadir (str)`: the directory used to persist the JWT key (see
+      `jwt_key`). Default "~/_timetagger". Not needed when `jwt_key` is set.
+    * `db_uri (str)`: the PostgreSQL connection string, e.g.
+      "postgresql://user:pass@host:5432/timetagger". This is REQUIRED:
+      TimeTagger stores all user data in this database. There is no SQLite
+      fallback.
+    * `jwt_key (str)`: optional secret used to sign JWT auth tokens. When set,
+      no state is written to disk (fully stateless deployment). When empty,
+      a key is generated and persisted to `datadir/jwt.key`.
     * `log_level (str)`: the log level for timetagger and asgineer
       (not the asgi server). Default "info".
     * `credentials (str)`: login credentials for one or more users, in the
@@ -58,6 +65,8 @@ class Config:
     _ITEMS = [
         ("bind", str, "127.0.0.1:8080"),
         ("datadir", str, "~/_timetagger"),
+        ("db_uri", str, ""),
+        ("jwt_key", str, ""),
         ("log_level", str, "info"),
         ("credentials", str, ""),
         ("proxy_auth_enabled", to_bool, False),

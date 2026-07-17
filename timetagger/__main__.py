@@ -21,13 +21,12 @@ using a modified version of this script.
 
 import sys
 import json
+import asyncio
 import logging
 from base64 import b64decode
 from importlib import resources
 
-import bcrypt
 import asgineer
-import itemdb
 import pscript
 import iptools
 import timetagger
@@ -40,15 +39,57 @@ from timetagger.server import (
     create_assets_from_dir,
     enable_service_worker,
 )
+from timetagger.server import _credentials
+
+
+def _run_user_admin(cmd, args):
+    """Handle the `user-*` CLI commands for managing login credentials."""
+
+    async def _run():
+        try:
+            if cmd in ("user-list", "users"):
+                users = await _credentials.list_users()
+                print("\n".join(users) if users else "(no users)")
+            elif cmd in ("user-add", "user-set", "user-set-password"):
+                if len(args) < 2:
+                    print(f"Usage: python -m timetagger {cmd} <username> <password>")
+                    return 2
+                await _credentials.set_password(args[0], args[1])
+                print(f"Saved credentials for user {args[0]!r}.")
+            elif cmd in ("user-remove", "user-del", "user-delete"):
+                if len(args) < 1:
+                    print(f"Usage: python -m timetagger {cmd} <username>")
+                    return 2
+                removed = await _credentials.delete_user(args[0])
+                print(f"Removed user {args[0]!r}." if removed else "No such user.")
+            else:
+                print(f"Unknown user command: {cmd}")
+                return 2
+            return 0
+        finally:
+            await _credentials.close()
+
+    return asyncio.run(_run())
+
 
 # Special hooks exit early
 if __name__ == "__main__" and len(sys.argv) >= 2:
     if sys.argv[1] in ("--version", "version"):
         print("timetagger", timetagger.__version__)
         print("asgineer", asgineer.__version__)
-        print("itemdb", itemdb.__version__)
         print("pscript", pscript.__version__)
         sys.exit(0)
+    elif sys.argv[1] in (
+        "user-list",
+        "users",
+        "user-add",
+        "user-set",
+        "user-set-password",
+        "user-remove",
+        "user-del",
+        "user-delete",
+    ):
+        sys.exit(_run_user_admin(sys.argv[1], sys.argv[2:]))
 
 
 logger = logging.getLogger("asgineer")
@@ -184,23 +225,35 @@ async def get_username_from_proxy(request):
 
 async def get_webtoken_usernamepassword(request, auth_info):
     """An authentication handler to exchange credentials for a webtoken.
-    The credentials are set via the config and are intended to support
-    a handful of users. See `get_webtoken_unsafe()` for details.
+    The credentials are stored (bcrypt-hashed) in the `credentials` table
+    in PostgreSQL and managed via the `python -m timetagger user-*` CLI.
+    See `get_webtoken_unsafe()` for details.
     """
-    # This approach uses bcrypt to hash the passwords with a salt,
-    # and is therefore much safer than e.g. BasicAuth.
+    # Seed any legacy env credentials into the DB (once, no overwrite).
+    await _ensure_credentials_seeded()
 
     # Get credentials from request
     user = auth_info.get("username", "").strip()
     pw = auth_info.get("password", "").strip()
-    # Get hash for this user
-    hash = CREDENTIALS.get(user, "")
-    # Check
-    if user and hash and bcrypt.checkpw(pw.encode(), hash.encode()):
+    # Check against the database
+    if await _credentials.verify_password(user, pw):
         token = await get_webtoken_unsafe(user)
         return 200, {}, dict(token=token)
     else:
         return 403, {}, "Invalid credentials"
+
+
+_credentials_seeded = False
+
+
+async def _ensure_credentials_seeded():
+    """One-time migration: copy `config.credentials` (env) into the DB table."""
+    global _credentials_seeded
+    if _credentials_seeded:
+        return
+    _credentials_seeded = True
+    if config.credentials.strip():
+        await _credentials.seed_from_env_credentials(config.credentials)
 
 
 async def get_webtoken_localhost(request, auth_info):
@@ -235,20 +288,11 @@ async def validate_auth(request, auth_info):
         raise AuthException("Autheticated user does not match proxy user")
 
 
-def load_credentials():
-    d = {}
-    for s in config.credentials.replace(";", ",").split(","):
-        name, _, hash = s.partition(":")
-        d[name] = hash
-    return d
-
-
 def load_trusted_proxies():
     ips = [s.strip() for s in config.proxy_auth_trusted.replace(";", ",").split(",")]
     return iptools.IpRangeList(*ips)
 
 
-CREDENTIALS = load_credentials()
 TRUSTED_PROXIES = load_trusted_proxies()
 
 

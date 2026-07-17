@@ -7,9 +7,8 @@ import time
 import logging
 import secrets
 
-import itemdb
-
-from ._utils import user2filename, create_jwt, decode_jwt
+from ._pg import PostgresItemDB
+from ._utils import create_jwt, decode_jwt
 
 from timetagger import __version__
 
@@ -184,9 +183,8 @@ async def authenticate(request):
     except Exception as err:
         raise AuthException(str(err))
 
-    # Open the database, this creates it if it does not yet exist
-    dbname = user2filename(auth_info["username"])
-    db = await itemdb.AsyncItemDB(dbname)
+    # Open the database, this creates the tables if they do not yet exist
+    db = await PostgresItemDB.open(auth_info["username"])
     await db.ensure_table("userinfo", *INDICES["userinfo"])
     await db.ensure_table("records", *INDICES["records"])
     await db.ensure_table("settings", *INDICES["settings"])
@@ -283,8 +281,7 @@ async def get_webtoken_unsafe(username, reset=False):
     use GET /api/v2/webtoken to get a fresh token once a day.
     """
     # Open db
-    dbname = user2filename(username)
-    db = await itemdb.AsyncItemDB(dbname)
+    db = await PostgresItemDB.open(username)
     await db.ensure_table("userinfo", *INDICES["userinfo"])
     # Produce payload
     seed = await _get_token_seed_from_db(db, "webtoken", reset)

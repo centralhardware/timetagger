@@ -1,4 +1,3 @@
-import os
 import json
 import time
 import asyncio
@@ -14,31 +13,48 @@ from timetagger.server import (
     AuthException,
     api_handler_triage,
     get_webtoken_unsafe,
-    user2filename,
+    PostgresItemDB,
+    get_pool,
 )
-
-import itemdb
+from timetagger.server._apiserver import INDICES
 
 USER = "test"
 HEADERS = {}
 
+TABLES = ("userinfo", "records", "settings")
+
+
+def _run(coro):
+    return asyncio.get_event_loop().run_until_complete(coro)
+
 
 def get_webtoken_unsafe_sync(username, reset=False):
-    co = get_webtoken_unsafe(username, reset)
-    return asyncio.get_event_loop().run_until_complete(co)
+    return _run(get_webtoken_unsafe(username, reset))
+
+
+async def _clear_test_db():
+    db = await PostgresItemDB.open(USER)
+    for table in TABLES:
+        await db.ensure_table(table, *INDICES[table])
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        for table in TABLES:
+            await conn.execute(f'DELETE FROM {table} WHERE "user" = $1', USER)
 
 
 def clear_test_db():
-    filename = user2filename(USER)
-    if os.path.isfile(filename):
-        os.remove(filename)
-
+    _run(_clear_test_db())
     HEADERS["authtoken"] = get_webtoken_unsafe_sync(USER)
 
 
+async def _get_from_db(what):
+    db = await PostgresItemDB.open(USER)
+    await db.ensure_table(what, *INDICES[what])
+    return await db.select_all(what)
+
+
 def get_from_db(what):
-    filename = user2filename(USER)
-    return itemdb.ItemDB(filename).select_all(what)
+    return _run(_get_from_db(what))
 
 
 async def our_api_handler(request):

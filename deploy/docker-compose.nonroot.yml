@@ -1,21 +1,32 @@
-# Example docker-compose file for TimeTagger that uses the published
-# Docker image in the nonroot variant.
-# Shows all options settable via the environment.
+# Example docker-compose file for TimeTagger (nonroot image) with a
+# PostgreSQL backend. See docker-compose.yml for notes on managing users.
 #
-# !! Make sure to apply your own credentials                       !!
-# !! You can use e.g. https://timetagger.app/cred to generate them !!
-# !! In docker-compose characters '$' should be escaped as '$$'    !!
-# !! If you use a .env file, use single quotes instead of escaping !!
+# With TIMETAGGER_JWT_KEY set, the timetagger container needs no volume.
 
 services:
   timetagger:
-    image: ghcr.io/almarklein/timetagger:latest-nonroot
+    image: ghcr.io/centralhardware/timetagger:latest-nonroot
     ports:
       - "80:80"
-    volumes:
-      - ./_timetagger:/opt/_timetagger
+    depends_on:
+      db:
+        condition: service_healthy
     environment:
       - TIMETAGGER_BIND=0.0.0.0:80
-      - TIMETAGGER_DATADIR=/opt/_timetagger
+      - TIMETAGGER_DB_URI=postgresql://timetagger:timetagger@db:5432/timetagger
+      - TIMETAGGER_JWT_KEY=change-me-to-a-long-random-secret
       - TIMETAGGER_LOG_LEVEL=info
-      - TIMETAGGER_CREDENTIALS=test:$$2a$$08$$0CD1NFiIbancwWsu3se1v.RNR/b7YeZd71yg3cZ/3whGlyU6Iny5i  # test:test
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=timetagger
+      - POSTGRES_PASSWORD=timetagger
+      - POSTGRES_DB=timetagger
+    volumes:
+      - ./_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U timetagger"]
+      interval: 5s
+      timeout: 5s
+      retries: 10

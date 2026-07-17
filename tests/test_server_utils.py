@@ -1,38 +1,9 @@
-import os
 import time
 
 from _common import run_tests
 from timetagger.server import _utils as utils
 
 from pytest import raises
-
-
-def test_user2filename_and_filename2user():
-    fnamechars = "".join(utils.ok_chars) + "=~."
-
-    examples = [
-        "foo@bar.com",
-        "a.typical.name@someprovider.com",
-        "does not have to be email",
-        "john.do+spam$%^@somedo.main.co.uk",
-        "with~~tilde.too@do.main",
-        "unicode€éö ?@grr.com",
-    ]
-
-    for username in examples:
-        filename = utils.user2filename(username)
-        fname = os.path.basename(filename)
-        print(fname)
-
-        assert fname.endswith(".db")
-        assert fname.count("~") == 1
-        assert fname.count(".") == 1
-
-        assert all(c in fnamechars for c in fname)
-
-        assert fname != filename
-        assert utils.filename2user(fname) == username
-        assert utils.filename2user(filename) == username
 
 
 def test_jwt_stuff():
