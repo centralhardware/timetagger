@@ -1158,9 +1158,7 @@ class TopWidget(Widget):
             self._draw_button(ctx, x + 30, y_balloon, None, 30, text, "", "", options)
 
     def _draw_menu_button(self, ctx, x1, y1, x2, y2):
-        if window.store.__name__.startswith("Demo"):
-            text = "Demo"
-        elif window.store.__name__.startswith("Sandbox"):
+        if window.store.__name__.startswith("Sandbox"):
             text = "Sandbox"
         else:
             text = ""

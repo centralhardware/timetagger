@@ -122,12 +122,9 @@ async def main_handler(request):
     worker won't interfere with other stuff you might serve on localhost.
     """
 
-    # Handle redirects
+    # Redirect the root path straight to the app (there is no landing page)
     if request.path == "/":
-        if config.app_redirect:
-            return 307, {"Location": f"{config.path_prefix}app/"}, b""
-        elif config.path_prefix != "/":
-            return 307, {"Location": config.path_prefix}, b""
+        return 307, {"Location": f"{config.path_prefix}app/"}, b""
 
     # Handle application requests
     if request.path.startswith(config.path_prefix):
@@ -141,6 +138,9 @@ async def main_handler(request):
             return await app_asset_handler(request, path)
         else:
             path = request.path.removeprefix(f"{config.path_prefix}").strip("/")
+            # The prefix root has no landing page either; go to the app
+            if not path:
+                return 307, {"Location": f"{config.path_prefix}app/"}, b""
             return await web_asset_handler(request, path)
 
     # Fallback Error 404

@@ -36,14 +36,14 @@ def test_assets():
         assert r.headers["cache-control"]
 
         # Get known page
-        r = p.get("demo")
+        r = p.get("sandbox")
         assert r.status == 200
         assert r.body.decode().startswith("<!DOCTYPE html>")
         assert r.headers["content-type"] == "text/html"
         assert r.headers["etag"]
         assert r.headers["cache-control"]
         # Test caching with etag
-        r = p.get("demo", headers={"if-none-match": r.headers["etag"]})
+        r = p.get("sandbox", headers={"if-none-match": r.headers["etag"]})
         assert r.status == 304
         assert not r.body
 

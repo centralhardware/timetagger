@@ -8,7 +8,6 @@
 interactive user experience and powerful reporting.
 
 * Website: https://timetagger.app
-* Demo: https://timetagger.app/demo
 * Docs: https://timetagger.readthedocs.io
 * CLI tool: https://github.com/almarklein/timetagger_cli
 * [TimeTagger_VSCodeExtension](https://github.com/Yamakaze-chan/TimeTagger_VSCodeExtension) (3d party)

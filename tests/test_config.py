@@ -68,26 +68,6 @@ def test_config():
     set_config([], {"TIMETAGGER_PATH_PREFIX": "api"})
     assert config.path_prefix == "/api/"
 
-    # Test app_redirect configuration
-    set_config([], {})
-    assert config.app_redirect is False
-    set_config(["--app_redirect=true"], {})
-    assert config.app_redirect is True
-    set_config(["--app_redirect=1"], {})
-    assert config.app_redirect is True
-    set_config(["--app_redirect=yes"], {})
-    assert config.app_redirect is True
-    set_config(["--app_redirect=false"], {})
-    assert config.app_redirect is False
-    set_config(["--app_redirect=0"], {})
-    assert config.app_redirect is False
-    set_config(["--app_redirect=no"], {})
-    assert config.app_redirect is False
-    set_config([], {"TIMETAGGER_APP_REDIRECT": "true"})
-    assert config.app_redirect is True
-    set_config([], {"TIMETAGGER_APP_REDIRECT": "false"})
-    assert config.app_redirect is False
-
     # Reset to normal (using sys.argv and os.environ)
     set_config()
 
