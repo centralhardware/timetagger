@@ -785,6 +785,14 @@ class BaseDataStore:
 class ConnectedDataStore(BaseDataStore):
     """A data store that communicates with the server."""
 
+    # Version of the shape of the data we keep in the browser cache. Bump this
+    # whenever that shape changes. On a mismatch the local cache is dropped so
+    # stale data cannot leak in; future versions can migrate the cached object
+    # in `_load_from_cache` instead of wiping. History:
+    #   1: initial
+    #   2: records use a `deleted` field instead of a "HIDDEN " ds prefix
+    _cache_version = 2
+
     def reset(self):
         super().reset()
         self._server_time = 0
@@ -832,6 +840,12 @@ class ConnectedDataStore(BaseDataStore):
             try:
                 storage = window.tools.AsyncStorage()
                 ob = await storage.getItem(self._auth.username)
+                if ob and ob.cache_version != self._cache_version:
+                    # The cache schema changed. For now we simply drop the whole
+                    # cache and re-sync from the server; future versions can
+                    # migrate `ob` in place here instead of wiping.
+                    await self._clear_cache()
+                    return
                 if ob and ob.server_time:
                     self._log_load("cache", ob)
                     self._server_time = ob.server_time
@@ -851,6 +865,7 @@ class ConnectedDataStore(BaseDataStore):
             try:
                 dump = {
                     "key": self._auth.username,
+                    "cache_version": self._cache_version,
                     "server_time": self._server_time,
                     "settings": self.settings.get_dump(),
                     "records": self.records.get_dump(),
