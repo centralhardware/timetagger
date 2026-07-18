@@ -2813,6 +2813,25 @@ class ReportDialog(BaseDialog):
             filtertext = self._tags.join(" ")
         else:
             filtertext = "<small>Select tags in overview panel</small>"
+
+        # Build the list of selectable timezones (fixed UTC offsets, in hours)
+        tz_offsets = [
+            -12, -11, -10, -9.5, -9, -8, -7, -6, -5, -4, -3.5, -3, -2, -1, 0,
+            1, 2, 3, 3.5, 4, 4.5, 5, 5.5, 5.75, 6, 6.5, 7, 8, 8.75, 9, 9.5,
+            10, 10.5, 11, 12, 12.75, 13, 14,
+        ]
+        tz_options = "<option value='local'>Local</option>"
+        for off in tz_offsets:
+            sign = "+" if off >= 0 else "-"
+            a = abs(off)
+            hh = str(int(a))
+            mm = str(int(round((a - int(a)) * 60)))
+            if len(hh) < 2:
+                hh = "0" + hh
+            if len(mm) < 2:
+                mm = "0" + mm
+            tz_options += f"<option value='{off}'>UTC{sign}{hh}:{mm}</option>"
+
         self._copybuttext = "Copy table"
         html = f"""
             <h1><i class='fas'>\uf15c</i>&nbsp;&nbsp;Report
@@ -2834,7 +2853,9 @@ class ReportDialog(BaseDialog):
                                         <option value='quarter'>quarter</option>
                                         <option value='year'>year</option>
                                      </select>
+                <div>Timezone:</div> <select>{tz_options}</select>
                 <div>Tag order:</div> <label><input type='checkbox' /> Hide secondary tags</label>
+                <div>Tags:</div> <label><input type='checkbox' /> Exclude tags from export</label>
                 <div>Duration format:</div> <select>
                                         <option value='h0'>9</option>
                                         <option value='hm'>9:07</option>
@@ -2863,12 +2884,14 @@ class ReportDialog(BaseDialog):
         self._date_range = form.children[3]
         self._grouping_select = form.children[5]
         self._groupperiod_select = form.children[7]
-        self._hidesecondary_but = form.children[9].children[0]  # inside label
-        self._format_but = form.children[11]
-        self._showrecords_but = form.children[13].children[0]  # inside label
-        self._copy_but = form.children[14]
-        self._savecsv_but = form.children[16]
-        self._savepdf_but = form.children[18]
+        self._timezone_select = form.children[9]
+        self._hidesecondary_but = form.children[11].children[0]  # inside label
+        self._hidetags_but = form.children[13].children[0]  # inside label
+        self._format_but = form.children[15]
+        self._showrecords_but = form.children[17].children[0]  # inside label
+        self._copy_but = form.children[18]
+        self._savecsv_but = form.children[20]
+        self._savepdf_but = form.children[22]
 
         # Connect input elements
         close_but = self.maindiv.children[0].children[-1]
@@ -2888,8 +2911,12 @@ class ReportDialog(BaseDialog):
         self._grouping_select.value = grouping
         groupperiod = window.simplesettings.get("report_groupperiod")
         self._groupperiod_select.value = groupperiod
+        timezone = window.simplesettings.get("report_timezone")
+        self._timezone_select.value = timezone
         hidesecondary = window.simplesettings.get("report_hidesecondary")
         self._hidesecondary_but.checked = hidesecondary
+        hidetags = window.simplesettings.get("report_hidetags")
+        self._hidetags_but.checked = hidetags
         format = window.simplesettings.get("report_format")
         self._format_but.value = format
         showrecords = window.simplesettings.get("report_showrecords")
@@ -2897,7 +2924,9 @@ class ReportDialog(BaseDialog):
         #
         self._grouping_select.onchange = self._on_setting_changed
         self._groupperiod_select.onchange = self._on_setting_changed
+        self._timezone_select.onchange = self._on_setting_changed
         self._hidesecondary_but.oninput = self._on_setting_changed
+        self._hidetags_but.oninput = self._on_setting_changed
         self._format_but.onchange = self._on_setting_changed
         self._showrecords_but.oninput = self._on_setting_changed
         #
@@ -2915,9 +2944,11 @@ class ReportDialog(BaseDialog):
     def _on_setting_changed(self):
         window.simplesettings.set("report_grouping", self._grouping_select.value)
         window.simplesettings.set("report_groupperiod", self._groupperiod_select.value)
+        window.simplesettings.set("report_timezone", self._timezone_select.value)
         window.simplesettings.set(
             "report_hidesecondary", self._hidesecondary_but.checked
         )
+        window.simplesettings.set("report_hidetags", self._hidetags_but.checked)
         window.simplesettings.set("report_format", self._format_but.value)
         window.simplesettings.set("report_showrecords", self._showrecords_but.checked)
         self._update_table()
@@ -2951,6 +2982,15 @@ class ReportDialog(BaseDialog):
 
     def _generate_table_rows(self, t1, t2):
         showrecords = self._showrecords_but.checked
+        hidetags = self._hidetags_but.checked
+
+        # Resolve the timezone to render times in. "local" means the
+        # browser-local zone (utc_offset None), otherwise a fixed offset in hours.
+        tz_value = self._timezone_select.value
+        if tz_value == "local":
+            utc_offset = None
+        else:
+            utc_offset = float(tz_value)
 
         format = self._format_but.value
         if format == "h0":
@@ -3077,12 +3117,18 @@ class ReportDialog(BaseDialog):
                 group_title = group_list1[group_index].title
                 for record in group_list1[group_index].records:
                     # Get period string
-                    date = dt.time2localstr(record.t1).split(" ")[0]
+                    date = dt.time2localstr(record.t1, utc_offset).split(" ")[0]
                     year = int(date.split("-")[0])
                     if group_period == "day":
                         period = dt.format_isodate(date)
                     elif group_period == "week":
-                        week = dt.get_weeknumber(record.t1)
+                        # Compute the ISO week of the calendar date in the
+                        # selected timezone (get_weeknumber only needs the date).
+                        dparts = date.split("-")
+                        wd = window.Date(
+                            int(dparts[0]), int(dparts[1]) - 1, int(dparts[2])
+                        )
+                        week = dt.get_weeknumber(wd.getTime() / 1000)
                         period = f"{year}W{week}"
                     elif group_period == "month":
                         month = int(date.split("-")[1])
@@ -3142,13 +3188,21 @@ class ReportDialog(BaseDialog):
                 records = group.records
                 for i in range(len(records)):
                     record = records[i]
-                    sd1, st1 = dt.time2localstr(record.t1).split(" ")
-                    sd2, st2 = dt.time2localstr(record.t2).split(" ")
+                    sd1, st1 = dt.time2localstr(record.t1, utc_offset).split(" ")
+                    sd2, st2 = dt.time2localstr(record.t2, utc_offset).split(" ")
                     if True:  # st1.endsWith(":00"):
                         st1 = st1[:-3]
                     if True:  # st2.endsWith(":00"):
                         st2 = st2[:-3]
                     duration = duration2str(record.duration)
+                    ds = to_str(record.get("ds", ""))  # strip tabs and newlines
+                    tagz = window.store.records.tags_from_record(record).join(" ")
+                    if hidetags:
+                        # Drop the tags column and strip inline #tags from the text
+                        parts = utils.get_tags_and_parts_from_string(ds)[1]
+                        ds = "".join([p for p in parts if not p.startswith("#")])
+                        ds = ds.replace("  ", " ").strip()
+                        tagz = ""
                     rows.append(
                         [
                             "record",
@@ -3157,8 +3211,8 @@ class ReportDialog(BaseDialog):
                             dt.format_isodate(sd1),
                             st1,
                             st2,
-                            to_str(record.get("ds", "")),  # strip tabs and newlines
-                            window.store.records.tags_from_record(record).join(" "),
+                            ds,
+                            tagz,
                         ]
                     )
 
@@ -3220,11 +3274,17 @@ class ReportDialog(BaseDialog):
         # the ds is stipped from \t\r\n.
 
         rows = self._generate_table_rows(self._last_t1, self._last_t2)
+        hidetags = self._hidetags_but.checked
 
         lines = []
-        lines.append(
-            "subtotals,tag_groups,duration,date,start,stop,description,user,tags"
-        )
+        if hidetags:
+            lines.append(
+                "subtotals,tag_groups,duration,date,start,stop,description,user"
+            )
+        else:
+            lines.append(
+                "subtotals,tag_groups,duration,date,start,stop,description,user,tags"
+            )
         lines.append("")
 
         user = ""  # noqa
@@ -3235,17 +3295,26 @@ class ReportDialog(BaseDialog):
 
         for row in rows:
             if row[0] == "blank":
-                lines.append(",,,,,,,,")
+                lines.append(",,,,,,," if hidetags else ",,,,,,,,")
             elif row[0] == "head":
-                lines.append(RawJS('row[1] + "," + row[2] + ",,,,,,,"'))
+                lines.append(
+                    RawJS('row[1] + "," + row[2] + (hidetags ? ",,,,,," : ",,,,,,,")')
+                )
             elif row[0] == "record":
                 _, key, duration, sd1, st1, st2, ds, tagz = row
                 ds = '"' + ds.replace('"', '""') + '"'
-                lines.append(
-                    RawJS(
-                        """',,' + duration + ',' + sd1 + ',' + st1 + ',' + st2 + ',' + ds + ',' + user + ',' + tagz"""
+                if hidetags:
+                    lines.append(
+                        RawJS(
+                            """',,' + duration + ',' + sd1 + ',' + st1 + ',' + st2 + ',' + ds + ',' + user"""
+                        )
                     )
-                )
+                else:
+                    lines.append(
+                        RawJS(
+                            """',,' + duration + ',' + sd1 + ',' + st1 + ',' + st2 + ',' + ds + ',' + user + ',' + tagz"""
+                        )
+                    )
 
         # Get blob wrapped in an object url
         obj_url = window.URL.createObjectURL(

@@ -617,6 +617,8 @@ class SimpleSettings:
             "report_hidesecondary": False,
             "report_format": "hm",
             "report_showrecords": True,
+            "report_timezone": "local",
+            "report_hidetags": False,
         }
         self._synced_keys = {
             "first_day_of_week": 1,

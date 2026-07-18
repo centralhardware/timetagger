@@ -162,9 +162,12 @@ def time2str(t, utc_offset=None):
     return s
 
 
-def time2localstr(t):
-    """Convert a time int into a textual local representation, and with a space instead of T. Note that the date is always yyyy-mm-dd"""
-    s = time2str(t)
+def time2localstr(t, utc_offset=None):
+    """Convert a time int into a textual local representation, and with a space
+    instead of T. Note that the date is always yyyy-mm-dd. If utc_offset is None,
+    the browser-local zone is used; otherwise the given offset (in hours) is used.
+    """
+    s = time2str(t, utc_offset)
     s1, s2 = s.split("T")
     s2 = s2.split("-")[0].split("+")[0].rstrip("Z")
     return s1 + " " + s2
