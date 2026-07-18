@@ -76,28 +76,52 @@ async def close_pool():
 
 # %% Table schema
 
-# The columns that make up each item, in addition to the "user" column. Items
-# are stored/reconstructed one column per field (no json blob); "value" columns
-# are jsonb and hold arbitrary JSON. "key" is the per-user primary key. This is
-# the single source of truth in code; the physical schema is created by the
-# migrations (see server/_migrations.py) and must stay in sync.
+# Mapping of item field name -> physical database column, per table. The API,
+# the DTOs and the client all speak the short field names (key, st, mt, t1, t2,
+# ds); the database uses readable column names. "value" columns are jsonb and
+# hold arbitrary JSON; "key" is the per-user primary key. This is the single
+# source of truth in code; the physical schema is created by the migrations
+# (see server/_migrations.py) and must stay in sync.
 _TABLES = {
-    "records": ["key", "st", "mt", "t1", "t2", "ds", "deleted"],
-    "settings": ["key", "st", "mt", "value"],
-    "userinfo": ["key", "st", "mt", "value"],
+    "records": {
+        "key": "key",
+        "st": "server_time",
+        "mt": "modified_time",
+        "t1": "start_time",
+        "t2": "stop_time",
+        "ds": "description",
+        "deleted": "deleted",
+    },
+    "settings": {
+        "key": "key",
+        "st": "server_time",
+        "mt": "modified_time",
+        "value": "value",
+    },
+    "userinfo": {
+        "key": "key",
+        "st": "server_time",
+        "mt": "modified_time",
+        "value": "value",
+    },
 }
 
 
 # %% Query translation (itemdb/SQLite dialect -> PostgreSQL)
 
 
-def _translate_where(query):
+def _translate_where(query, fieldmap):
     """Translate an itemdb (SQLite) WHERE fragment to PostgreSQL.
 
-    The user-supplied ``?`` placeholders are renumbered to ``$2, $3, ...``
+    Field names are mapped to their physical column names, ``==`` becomes ``=``
+    and the user-supplied ``?`` placeholders are renumbered to ``$2, $3, ...``
     ($1 is reserved for the user filter that the caller prepends).
     """
-    q = query.replace("==", "=")
+    q = query
+    for field, column in fieldmap.items():
+        if field != column:
+            q = re.sub(rf"\b{field}\b", f'"{column}"', q)
+    q = q.replace("==", "=")
     counter = itertools.count(2)
     q = re.sub(r"\?", lambda m: f"${next(counter)}", q)
     return q
@@ -181,9 +205,10 @@ class PostgresItemDB:
         return self
 
     async def _refresh_mtime(self, table_name):
+        st_col = _TABLES[table_name]["st"]
         async with self._acquire() as conn:
             row = await conn.fetchrow(
-                f'SELECT max(st) AS m FROM {table_name} WHERE "user" = $1',
+                f'SELECT max("{st_col}") AS m FROM {table_name} WHERE "user" = $1',
                 self._user,
             )
         if row is not None and row["m"] is not None:
@@ -191,42 +216,47 @@ class PostgresItemDB:
 
     # -- reading
 
-    def _columns(self, table_name):
-        columns = _TABLES.get(table_name)
-        if columns is None:
+    def _fieldmap(self, table_name):
+        fieldmap = _TABLES.get(table_name)
+        if fieldmap is None:
             raise KeyError(f"Unknown table {table_name!r}.")
-        return columns
+        return fieldmap
 
     @staticmethod
-    def _row_to_item(columns, row):
-        """Reconstruct an item dict from a row, dropping absent (NULL) fields."""
+    def _row_to_item(fieldmap, row):
+        """Reconstruct a field-named item dict from a row, dropping NULLs."""
         item = {}
-        for col in columns:
-            val = row[col]
+        for field in fieldmap:
+            val = row[field]
             if val is not None:
-                item[col] = val
+                item[field] = val
         return item
 
+    def _collist(self, fieldmap):
+        # Select physical columns, aliased back to the short field names.
+        return ", ".join(f'"{col}" AS "{field}"' for field, col in fieldmap.items())
+
     async def select(self, table_name, query, *save_args):
-        columns = self._columns(table_name)
-        collist = ", ".join(f'"{c}"' for c in columns)
-        where = _translate_where(query)
-        sql = f'SELECT {collist} FROM {table_name} WHERE ("user" = $1) AND ({where})'
+        fieldmap = self._fieldmap(table_name)
+        where = _translate_where(query, fieldmap)
+        sql = (
+            f"SELECT {self._collist(fieldmap)} FROM {table_name} "
+            f'WHERE ("user" = $1) AND ({where})'
+        )
         async with self._acquire() as conn:
             rows = await conn.fetch(sql, self._user, *save_args)
-        return [self._row_to_item(columns, row) for row in rows]
+        return [self._row_to_item(fieldmap, row) for row in rows]
 
     async def select_one(self, table_name, query, *save_args):
         items = await self.select(table_name, query, *save_args)
         return items[0] if items else None
 
     async def select_all(self, table_name):
-        columns = self._columns(table_name)
-        collist = ", ".join(f'"{c}"' for c in columns)
-        sql = f'SELECT {collist} FROM {table_name} WHERE "user" = $1'
+        fieldmap = self._fieldmap(table_name)
+        sql = f'SELECT {self._collist(fieldmap)} FROM {table_name} WHERE "user" = $1'
         async with self._acquire() as conn:
             rows = await conn.fetch(sql, self._user)
-        return [self._row_to_item(columns, row) for row in rows]
+        return [self._row_to_item(fieldmap, row) for row in rows]
 
     # -- writing
 
@@ -234,7 +264,8 @@ class PostgresItemDB:
         if self._tx_conn is None:
             raise IOError("Can only use put() within a transaction.")
 
-        columns = self._columns(table_name)
+        fieldmap = self._fieldmap(table_name)
+        key_col = fieldmap["key"]
 
         for item in items:
             if not isinstance(item, dict):
@@ -244,18 +275,20 @@ class PostgresItemDB:
 
             # Only write the columns that the item actually provides, so that
             # partial updates leave other columns untouched.
-            present = [c for c in columns if c in item]
-            cols = ['"user"'] + [f'"{c}"' for c in present]
-            values = [self._user] + [item[c] for c in present]
+            present = [f for f in fieldmap if f in item]
+            cols = ['"user"'] + [f'"{fieldmap[f]}"' for f in present]
+            values = [self._user] + [item[f] for f in present]
             placeholders = ", ".join(f"${i + 1}" for i in range(len(values)))
             update_cols = ", ".join(
-                f'"{c}" = EXCLUDED."{c}"' for c in present if c != "key"
+                f'"{fieldmap[f]}" = EXCLUDED."{fieldmap[f]}"'
+                for f in present
+                if f != "key"
             )
             conflict = f"DO UPDATE SET {update_cols}" if update_cols else "DO NOTHING"
             sql = (
                 f"INSERT INTO {table_name} ({', '.join(cols)}) "
                 f"VALUES ({placeholders}) "
-                f'ON CONFLICT ("user", "key") {conflict}'
+                f'ON CONFLICT ("user", "{key_col}") {conflict}'
             )
             await self._tx_conn.execute(sql, *values)
 

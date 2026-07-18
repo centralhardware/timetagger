@@ -26,9 +26,10 @@ async def set_password(username, password):
     pw_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
     pool = await get_pool()
     sql = (
-        "INSERT INTO credentials (username, pw_hash, mt) VALUES ($1, $2, $3) "
+        "INSERT INTO credentials (username, pw_hash, modified_time) "
+        "VALUES ($1, $2, $3) "
         "ON CONFLICT (username) DO UPDATE SET "
-        "pw_hash = EXCLUDED.pw_hash, mt = EXCLUDED.mt"
+        "pw_hash = EXCLUDED.pw_hash, modified_time = EXCLUDED.modified_time"
     )
     async with pool.acquire() as conn:
         await conn.execute(sql, username, pw_hash, time.time())
