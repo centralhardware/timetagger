@@ -17,11 +17,13 @@ from timetagger.server import (
     get_pool,
 )
 from timetagger.server._migrations import migrate
+from timetagger.server._dtos import Record, Setting, UserInfo
 
 USER = "test"
 HEADERS = {}
 
 TABLES = ("userinfo", "records", "settings")
+DTO_BY_TABLE = {"userinfo": UserInfo, "records": Record, "settings": Setting}
 
 
 def _run(coro):
@@ -36,7 +38,7 @@ async def _clear_test_db():
     await migrate()
     db = await PostgresItemDB.open(USER)
     for table in TABLES:
-        await db.ensure_table(table)
+        await db.ensure_table(DTO_BY_TABLE[table])
     pool = await get_pool()
     async with pool.acquire() as conn:
         for table in TABLES:
@@ -50,8 +52,8 @@ def clear_test_db():
 
 async def _get_from_db(what):
     db = await PostgresItemDB.open(USER)
-    await db.ensure_table(what)
-    return await db.select_all(what)
+    await db.ensure_table(DTO_BY_TABLE[what])
+    return await db.select_all(DTO_BY_TABLE[what])
 
 
 def get_from_db(what):

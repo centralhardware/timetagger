@@ -7,7 +7,7 @@ import logging
 import secrets
 
 from ._pg import PostgresItemDB
-from ._dtos import DTO_CLASSES
+from ._dtos import DTO_CLASSES, Record, Setting, UserInfo
 from ._utils import create_jwt, decode_jwt
 
 from timetagger import __version__
@@ -135,9 +135,9 @@ async def authenticate(request):
 
     # Open the database (the schema is created by the migrations).
     db = await PostgresItemDB.open(auth_info["username"])
-    await db.ensure_table("userinfo")
-    await db.ensure_table("records")
-    await db.ensure_table("settings")
+    await db.ensure_table(UserInfo)
+    await db.ensure_table(Record)
+    await db.ensure_table(Setting)
 
     # Get reference seed from db
     expires = auth_info["expires"]
@@ -202,16 +202,14 @@ async def _get_any_token(auth_info, db, tokenkind, reset):
 async def _get_token_seed_from_db(db, tokenkind, reset):
     # Get seed
     query = f"key = '{tokenkind}_seed'"
-    ob = await db.select_one("userinfo", query) or {}
-    seed = ob.get("value", "")
+    ob = await db.select_one(UserInfo, query)
+    seed = ob.value if ob else ""
     # Create new seed if needed
     if reset or not seed:
         seed = secrets.token_urlsafe(8)  # new random seed
         st = time.time()
         async with db:
-            await db.put_one(
-                "userinfo", key=f"{tokenkind}_seed", st=st, mt=st, value=seed
-            )
+            await db.put(UserInfo(key=f"{tokenkind}_seed", st=st, mt=st, value=seed))
     return seed
 
 
@@ -232,7 +230,7 @@ async def get_webtoken_unsafe(username, reset=False):
     """
     # Open db
     db = await PostgresItemDB.open(username)
-    await db.ensure_table("userinfo")
+    await db.ensure_table(UserInfo)
     # Produce payload
     seed = await _get_token_seed_from_db(db, "webtoken", reset)
     payload = dict(
@@ -283,25 +281,25 @@ async def get_updates(request, auth_info, db):
     # Get reset time from userinfo. We set userinfo.reset_time when the
     # database is reset (or when we want to force a refresh). We make
     # the client reset if since < reset_time.
-    ob = await db.select_one("userinfo", "key == 'reset_time'")
-    reset_time = float((ob or {}).get("value", -1))
+    ob = await db.select_one(UserInfo, "key == 'reset_time'")
+    reset_time = float(ob.value if ob else -1)
     reset = since <= reset_time
 
     # Get data
     if reset:
-        records = await db.select_all("records")
-        settings = await db.select_all("settings")
+        records = await db.select_all(Record)
+        settings = await db.select_all(Setting)
     else:
         query = f"st >= {float(since)}"
-        records = await db.select("records", query)
-        settings = await db.select("settings", query)
+        records = await db.select(Record, query)
+        settings = await db.select(Setting, query)
 
     # Return result
     result = dict(
         server_time=server_time,
         reset=reset,
-        records=records,
-        settings=settings,
+        records=[r.model_dump() for r in records],
+        settings=[s.model_dump() for s in settings],
     )
     return 200, {}, result
 
@@ -366,10 +364,10 @@ async def get_records(request, auth_info, db):
     query = " AND ".join(f"({part})" for part in query_parts)
 
     # Collect records
-    records = await db.select("records", query, *safe_params)
+    records = await db.select(Record, query, *safe_params)
 
     # Return result
-    result = dict(records=records)
+    result = dict(records=[r.model_dump() for r in records])
     return 200, {}, result
 
 
@@ -379,10 +377,10 @@ async def put_records(request, auth_info, db):
 
 async def get_settings(request, auth_info, db):
     # Collect settings
-    settings = await db.select_all("settings")
+    settings = await db.select_all(Setting)
 
     # Return result
-    result = dict(settings=settings)
+    result = dict(settings=[s.model_dump() for s in settings])
     return 200, {}, result
 
 
@@ -406,8 +404,8 @@ async def _push_items(request, auth_info, db, what):
     errors2 = []  # error messages for items that did not even have a key
 
     async with db:
-        ob = await db.select_one("userinfo", "key == 'reset_time'")
-        reset_time = float((ob or {}).get("value", -1))
+        ob = await db.select_one(UserInfo, "key == 'reset_time'")
+        reset_time = float(ob.value if ob else -1)
 
         for raw in items:
             # First check minimal requirement.
@@ -419,8 +417,7 @@ async def _push_items(request, auth_info, db, what):
             # Get the current item (or None). We will ALWAYS update the item's
             # st (except when there is no current item and the incoming one is
             # corrupt). This helps guarantee consistency between server/client.
-            cur_row = await db.select_one(what, "key == ?", key)
-            cur = Model.model_validate(cur_row) if cur_row is not None else None
+            cur = await db.select_one(Model, "key == ?", key)
 
             # Validate/parse the incoming item into a typed DTO.
             try:
@@ -452,7 +449,7 @@ async def _push_items(request, auth_info, db, what):
                 item.st = server_time
 
             # Store it!
-            await db.put(what, item.model_dump())
+            await db.put(item)
 
     # Return result
     result = dict(
@@ -467,7 +464,7 @@ async def put_forcereset(request, auth_info, db):
     st = time.time()
 
     async with db:
-        await db.put_one("userinfo", key="reset_time", st=st, mt=st, value=st)
+        await db.put(UserInfo(key="reset_time", st=st, mt=st, value=st))
 
     result = dict(status="ok")
     return 200, {}, result

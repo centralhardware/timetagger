@@ -3,9 +3,9 @@ PostgreSQL storage backend for TimeTagger.
 
 This replaces the former SQLite (itemdb) backend. All user data is stored
 in a single PostgreSQL database; each row is scoped to a user via the
-``user`` column. The public class ``PostgresItemDB`` mimics the small
-subset of the itemdb API that TimeTagger uses, so that the rest of the
-server code can stay agnostic of the storage details.
+``user`` column. ``PostgresItemDB`` reads and writes typed DTOs (see
+``server/_dtos.py``): each DTO knows its table and the field->column mapping,
+so this layer never deals with loose per-field dicts.
 
 The connection string is taken from ``config.db_uri`` (env
 ``TIMETAGGER_DB_URI``), e.g. ``postgresql://user:pass@host:5432/timetagger``.
@@ -74,51 +74,19 @@ async def close_pool():
         await pool.close()
 
 
-# %% Table schema
-
-# Mapping of item field name -> physical database column, per table. The API,
-# the DTOs and the client all speak the short field names (key, st, mt, t1, t2,
-# ds); the database uses readable column names. "value" columns are jsonb and
-# hold arbitrary JSON; "key" is the per-user primary key. This is the single
-# source of truth in code; the physical schema is created by the migrations
-# (see server/_migrations.py) and must stay in sync.
-_TABLES = {
-    "records": {
-        "key": "key",
-        "st": "server_time",
-        "mt": "modified_time",
-        "t1": "start_time",
-        "t2": "stop_time",
-        "ds": "description",
-        "deleted": "deleted",
-    },
-    "settings": {
-        "key": "key",
-        "st": "server_time",
-        "mt": "modified_time",
-        "value": "value",
-    },
-    "userinfo": {
-        "key": "key",
-        "st": "server_time",
-        "mt": "modified_time",
-        "value": "value",
-    },
-}
-
-
 # %% Query translation (itemdb/SQLite dialect -> PostgreSQL)
 
 
-def _translate_where(query, fieldmap):
+def _translate_where(query, dto_cls):
     """Translate an itemdb (SQLite) WHERE fragment to PostgreSQL.
 
-    Field names are mapped to their physical column names, ``==`` becomes ``=``
-    and the user-supplied ``?`` placeholders are renumbered to ``$2, $3, ...``
-    ($1 is reserved for the user filter that the caller prepends).
+    Field names are mapped to their physical column names (per the DTO), ``==``
+    becomes ``=`` and the user-supplied ``?`` placeholders are renumbered to
+    ``$2, $3, ...`` ($1 is reserved for the user filter the caller prepends).
     """
     q = query
-    for field, column in fieldmap.items():
+    for field in dto_cls.model_fields:
+        column = dto_cls.column_for(field)
         if field != column:
             q = re.sub(rf"\b{field}\b", f'"{column}"', q)
     q = q.replace("==", "=")
@@ -133,10 +101,11 @@ def _translate_where(query, fieldmap):
 class PostgresItemDB:
     """A per-user view on the shared PostgreSQL database.
 
-    Presents the subset of the itemdb API that TimeTagger relies on:
-    ``ensure_table``, ``select``, ``select_one``, ``select_all``,
-    ``put``, ``put_one``, the ``mtime`` property and use as an async
-    transaction context manager (``async with db: ...``).
+    Works in terms of DTO classes/instances (see ``server/_dtos.py``):
+    ``ensure_table(dto_cls)``, ``select(dto_cls, ...)``, ``select_one``,
+    ``select_all(dto_cls)`` return DTOs, and ``put(*dtos)`` stores them.
+    Also exposes the ``mtime`` property and works as an async transaction
+    context manager (``async with db: ...``).
     """
 
     def __init__(self, username):
@@ -190,25 +159,21 @@ class PostgresItemDB:
 
     # -- schema
 
-    async def ensure_table(self, table_name, *indices):
-        """Sync mtime for a table.
+    async def ensure_table(self, dto_cls):
+        """Sync mtime for the given DTO's table.
 
         The schema itself is created centrally by the migrations (see
-        ``server/_migrations.py``) and the columns are described by
-        ``_TABLES``; the ``indices`` argument is accepted for API
-        compatibility but ignored.
+        ``server/_migrations.py``); the columns are described by the DTO.
         """
-        if table_name not in _TABLES:
-            raise KeyError(f"Unknown table {table_name!r}.")
-        # Keep mtime in sync with what is currently in the table.
-        await self._refresh_mtime(table_name)
+        await self._refresh_mtime(dto_cls)
         return self
 
-    async def _refresh_mtime(self, table_name):
-        st_col = _TABLES[table_name]["st"]
+    async def _refresh_mtime(self, dto_cls):
+        st_col = dto_cls.column_for("st")
+        table = dto_cls.table_name
         async with self._acquire() as conn:
             row = await conn.fetchrow(
-                f'SELECT max("{st_col}") AS m FROM {table_name} WHERE "user" = $1',
+                f'SELECT max("{st_col}") AS m FROM {table} WHERE "user" = $1',
                 self._user,
             )
         if row is not None and row["m"] is not None:
@@ -216,85 +181,63 @@ class PostgresItemDB:
 
     # -- reading
 
-    def _fieldmap(self, table_name):
-        fieldmap = _TABLES.get(table_name)
-        if fieldmap is None:
-            raise KeyError(f"Unknown table {table_name!r}.")
-        return fieldmap
-
     @staticmethod
-    def _row_to_item(fieldmap, row):
-        """Reconstruct a field-named item dict from a row, dropping NULLs."""
-        item = {}
-        for field in fieldmap:
-            val = row[field]
-            if val is not None:
-                item[field] = val
-        return item
-
-    def _collist(self, fieldmap):
+    def _collist(dto_cls):
         # Select physical columns, aliased back to the short field names.
-        return ", ".join(f'"{col}" AS "{field}"' for field, col in fieldmap.items())
+        return ", ".join(
+            f'"{dto_cls.column_for(f)}" AS "{f}"' for f in dto_cls.model_fields
+        )
 
-    async def select(self, table_name, query, *save_args):
-        fieldmap = self._fieldmap(table_name)
-        where = _translate_where(query, fieldmap)
+    async def select(self, dto_cls, query, *save_args):
+        where = _translate_where(query, dto_cls)
         sql = (
-            f"SELECT {self._collist(fieldmap)} FROM {table_name} "
+            f"SELECT {self._collist(dto_cls)} FROM {dto_cls.table_name} "
             f'WHERE ("user" = $1) AND ({where})'
         )
         async with self._acquire() as conn:
             rows = await conn.fetch(sql, self._user, *save_args)
-        return [self._row_to_item(fieldmap, row) for row in rows]
+        return [dto_cls.from_row(row) for row in rows]
 
-    async def select_one(self, table_name, query, *save_args):
-        items = await self.select(table_name, query, *save_args)
+    async def select_one(self, dto_cls, query, *save_args):
+        items = await self.select(dto_cls, query, *save_args)
         return items[0] if items else None
 
-    async def select_all(self, table_name):
-        fieldmap = self._fieldmap(table_name)
-        sql = f'SELECT {self._collist(fieldmap)} FROM {table_name} WHERE "user" = $1'
+    async def select_all(self, dto_cls):
+        sql = (
+            f"SELECT {self._collist(dto_cls)} FROM {dto_cls.table_name} "
+            f'WHERE "user" = $1'
+        )
         async with self._acquire() as conn:
             rows = await conn.fetch(sql, self._user)
-        return [self._row_to_item(fieldmap, row) for row in rows]
+        return [dto_cls.from_row(row) for row in rows]
 
     # -- writing
 
-    async def put(self, table_name, *items):
+    async def put(self, *items):
         if self._tx_conn is None:
             raise IOError("Can only use put() within a transaction.")
 
-        fieldmap = self._fieldmap(table_name)
-        key_col = fieldmap["key"]
-
         for item in items:
-            if not isinstance(item, dict):
-                raise TypeError("Expecting each item to be a dict")
-            if "key" not in item:
-                raise IndexError("Item does not have required field 'key'")
+            dto_cls = type(item)
+            key_col = dto_cls.column_for(dto_cls.key_field)
 
-            # Only write the columns that the item actually provides, so that
+            # Only write the columns the item actually sets (skips None), so
             # partial updates leave other columns untouched.
-            present = [f for f in fieldmap if f in item]
-            cols = ['"user"'] + [f'"{fieldmap[f]}"' for f in present]
-            values = [self._user] + [item[f] for f in present]
+            row = item.to_row()
+            columns = list(row.keys())
+            cols = ['"user"'] + [f'"{c}"' for c in columns]
+            values = [self._user] + [row[c] for c in columns]
             placeholders = ", ".join(f"${i + 1}" for i in range(len(values)))
             update_cols = ", ".join(
-                f'"{fieldmap[f]}" = EXCLUDED."{fieldmap[f]}"'
-                for f in present
-                if f != "key"
+                f'"{c}" = EXCLUDED."{c}"' for c in columns if c != key_col
             )
             conflict = f"DO UPDATE SET {update_cols}" if update_cols else "DO NOTHING"
             sql = (
-                f"INSERT INTO {table_name} ({', '.join(cols)}) "
+                f"INSERT INTO {dto_cls.table_name} ({', '.join(cols)}) "
                 f"VALUES ({placeholders}) "
                 f'ON CONFLICT ("user", "{key_col}") {conflict}'
             )
             await self._tx_conn.execute(sql, *values)
 
-            st = item.get("st")
-            if isinstance(st, (int, float)):
-                self._mtime = max(self._mtime, float(st))
-
-    async def put_one(self, table_name, **item):
-        await self.put(table_name, item)
+            if isinstance(item.st, (int, float)):
+                self._mtime = max(self._mtime, float(item.st))
