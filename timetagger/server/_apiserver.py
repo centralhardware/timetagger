@@ -2,12 +2,12 @@
 This implements the API side of the server.
 """
 
-import json
 import time
 import logging
 import secrets
 
 from ._pg import PostgresItemDB
+from ._dtos import DTO_CLASSES
 from ._utils import create_jwt, decode_jwt
 
 from timetagger import __version__
@@ -15,62 +15,10 @@ from timetagger import __version__
 logger = logging.getLogger("asgineer")
 
 
-# At the server:
-#
-# * We specify the fields that an item has (that the server accepts).
-# * We specify a subset of those that are required. This allows more flexibility
-#   in clients, and helps when we add fields at the server, but have old clients.
-# * We specify how the incoming values are converted/checked.
-# * Other incoming fields are simply ignored.
-# * There is a special field st (server time) that the server adds to each item.
-# * We have tests to ensure that the lines below line up with the same
-#   values in client/stores.py.
-
-to_int = int
-to_float = float
-
-
-def to_str(s):
-    s = str(s)
-    if len(s) >= STR_MAX:
-        raise ValueError("String values must be less than 256 chars.")
-    return s
-
-
-def to_jsonable(x):
-    s = json.dumps(x)
-    if len(s) >= JSON_MAX:
-        raise ValueError("Values must be less than 256 chars when jsonized.")
-    return x
-
-
-# ----- COMMON PART (don't change this comment)
-
-RECORD_SPEC = dict(
-    key=to_str, mt=to_int, t1=to_int, t2=to_int, ds=to_str, deleted=to_int
-)
-RECORD_REQ = ["key", "mt", "t1", "t2"]
-
-SETTING_SPEC = dict(key=to_str, mt=to_int, value=to_jsonable)
-SETTING_REQ = ["key", "mt", "value"]
-
-STR_MAX = 256
-JSON_MAX = 8192
-
-# ----- END COMMON PART (don't change this comment)
-
-SPECS = {"records": RECORD_SPEC, "settings": SETTING_SPEC}
-REQS = {
-    "records": frozenset(RECORD_REQ),
-    "settings": frozenset(SETTING_REQ),
-}
-
-# Database indices
-INDICES = {
-    "records": ("!key", "st", "t1", "t2"),
-    "settings": ("!key", "st"),
-    "userinfo": ("!key", "st"),
-}
+# Incoming items are validated/coerced into typed DTOs (see server/_dtos.py):
+# each DTO declares its fields and the subset that clients must provide, so
+# unknown fields are ignored and old clients that omit optional fields still
+# work. The server assigns the special st (server time) field itself.
 
 FALSY_VALUES = ("false", "off", "no", "n", "0")
 
@@ -185,11 +133,11 @@ async def authenticate(request):
     except Exception as err:
         raise AuthException(str(err))
 
-    # Open the database, this creates the tables if they do not yet exist
+    # Open the database (the schema is created by the migrations).
     db = await PostgresItemDB.open(auth_info["username"])
-    await db.ensure_table("userinfo", *INDICES["userinfo"])
-    await db.ensure_table("records", *INDICES["records"])
-    await db.ensure_table("settings", *INDICES["settings"])
+    await db.ensure_table("userinfo")
+    await db.ensure_table("records")
+    await db.ensure_table("settings")
 
     # Get reference seed from db
     expires = auth_info["expires"]
@@ -284,7 +232,7 @@ async def get_webtoken_unsafe(username, reset=False):
     """
     # Open db
     db = await PostgresItemDB.open(username)
-    await db.ensure_table("userinfo", *INDICES["userinfo"])
+    await db.ensure_table("userinfo")
     # Produce payload
     seed = await _get_token_seed_from_db(db, "webtoken", reset)
     payload = dict(
@@ -450,8 +398,7 @@ async def _push_items(request, auth_info, db, what):
 
     server_time = time.time()
 
-    req = REQS[what]
-    spec = SPECS[what]
+    Model = DTO_CLASSES[what]
 
     accepted = []  # keys of accepted items (but might have mt < current)
     failed = []  # keys of corrupt items
@@ -462,54 +409,50 @@ async def _push_items(request, auth_info, db, what):
         ob = await db.select_one("userinfo", "key == 'reset_time'")
         reset_time = float((ob or {}).get("value", -1))
 
-        for item in items:
+        for raw in items:
             # First check minimal requirement.
-            if not (isinstance(item, dict) and isinstance(item.get("key", None), str)):
+            if not (isinstance(raw, dict) and isinstance(raw.get("key", None), str)):
                 errors2.append("Got item that is not a dict with str 'key' field.")
                 continue
+            key = raw["key"]
 
-            # Get current item (or None). We will ALWAYS update the item's st
-            # (except when cur_item is None and incoming is corrupt).
-            # This helps guarantee consistency between server and client.
-            cur_item = await db.select_one(what, "key == ?", item["key"])
+            # Get the current item (or None). We will ALWAYS update the item's
+            # st (except when there is no current item and the incoming one is
+            # corrupt). This helps guarantee consistency between server/client.
+            cur_row = await db.select_one(what, "key == ?", key)
+            cur = Model.model_validate(cur_row) if cur_row is not None else None
 
-            # Validate and copy the item (only copy fields that we know)
+            # Validate/parse the incoming item into a typed DTO.
             try:
-                item = {
-                    key: func(item[key]) for key, func in spec.items() if key in item
-                }
-                if req.difference(item.keys()):
-                    raise ValueError(
-                        f"A {what} is missing required fields: {req.difference(item.keys())}"
-                    )
-                if item["mt"] < reset_time:
+                item = Model.model_validate(raw)
+                if item.mt < reset_time:
                     raise ValueError("Item was modified after a reset")
             except Exception as err:
                 # Item is corrupt - mark it as failed
-                failed.append(item["key"])
+                failed.append(key)
                 errors.append(str(err))
                 # Re-put the current item if there was one, otherwise ignore
-                if cur_item is not None:
-                    item = cur_item
+                if cur is not None:
+                    item = cur
                 else:
                     continue
             else:
-                accepted.append(item["key"])
+                accepted.append(key)
 
             # Reput the current item if its mt is larger than the incoming item.
-            if cur_item is not None and cur_item["mt"] > item["mt"]:
-                item = cur_item
+            if cur is not None and cur.mt > item.mt:
+                item = cur
 
             # Ensure that st is never equal, so that we can guarantee
             # eventual consistency. It also means that the exact value
             # of mt is less important and we can allow it to be int.
-            if cur_item is not None:
-                item["st"] = max(server_time, cur_item["st"] + 0.0001)
+            if cur is not None:
+                item.st = max(server_time, cur.st + 0.0001)
             else:
-                item["st"] = server_time
+                item.st = server_time
 
             # Store it!
-            await db.put(what, item)
+            await db.put(what, item.model_dump())
 
     # Return result
     result = dict(

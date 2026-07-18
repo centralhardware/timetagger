@@ -16,7 +16,7 @@ RUN pip --no-cache-dir install pip --upgrade && pip --no-cache-dir install \
     uvicorn uvloop httptools \
     fastuaparser asyncpg>=0.30.0 asgineer requests \
     jinja2 markdown pscript \
-    pyjwt cryptography
+    pyjwt cryptography pydantic>=2
 
 # This causes the cache to skip, so that we get the latest TimeTagger version.
 # If this occasionally does not work (e.g. ramdom.org is out), simply comment.

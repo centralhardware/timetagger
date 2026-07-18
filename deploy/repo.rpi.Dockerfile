@@ -15,7 +15,7 @@ RUN apt-get update && \
          uvicorn uvloop httptools \
          fastuaparser itemdb>=1.1.1 asgineer requests \
          jinja2 markdown pscript \
-         pyjwt cryptography==3.4.6
+         pyjwt cryptography==3.4.6 pydantic>=2
 
 WORKDIR /root
 COPY . .

@@ -16,7 +16,6 @@ from timetagger.server import (
     PostgresItemDB,
     get_pool,
 )
-from timetagger.server._apiserver import INDICES
 from timetagger.server._migrations import migrate
 
 USER = "test"
@@ -37,7 +36,7 @@ async def _clear_test_db():
     await migrate()
     db = await PostgresItemDB.open(USER)
     for table in TABLES:
-        await db.ensure_table(table, *INDICES[table])
+        await db.ensure_table(table)
     pool = await get_pool()
     async with pool.acquire() as conn:
         for table in TABLES:
@@ -51,7 +50,7 @@ def clear_test_db():
 
 async def _get_from_db(what):
     db = await PostgresItemDB.open(USER)
-    await db.ensure_table(what, *INDICES[what])
+    await db.ensure_table(what)
     return await db.select_all(what)
 
 
@@ -252,7 +251,7 @@ def test_settings():
         )
         assert r.status == 200
         assert dejsonize(r)["accepted"] == []
-        assert "invalid literal" in dejsonize(r)["errors"][0]
+        assert "valid integer" in dejsonize(r)["errors"][0]
 
         # Try adding data over 10 MiB
         settings = [dict(key="pref8", mt=100, value=42)] * 600000
@@ -276,8 +275,8 @@ def test_settings():
         )
         assert r.status == 200
         assert dejsonize(r)["accepted"] == []
-        assert "less than 256" in dejsonize(r)["errors"][0]
-        assert "less than 256" in dejsonize(r)["errors"][1]
+        assert "at most 255" in dejsonize(r)["errors"][0]
+        assert "less than 8192" in dejsonize(r)["errors"][1]
 
         # Check status. This checks that all the above requests
         # failed without adding settings in the same request
@@ -393,8 +392,8 @@ def test_records():
         assert r.status == 200
         assert dejsonize(r)["accepted"] == []
         assert dejsonize(r)["failed"] == ["r23", "r24"]
-        assert "invalid literal" in dejsonize(r)["errors"][0]
-        assert "invalid literal" in dejsonize(r)["errors"][1]
+        assert "valid integer" in dejsonize(r)["errors"][0]
+        assert "valid integer" in dejsonize(r)["errors"][1]
 
         # Try adding records over 10 MiB
         records = [dict(key="r25", mt=120, t1=310, t2=350, ds="xx")] * 200000
@@ -419,8 +418,8 @@ def test_records():
         assert r.status == 200
         assert dejsonize(r)["accepted"] == []
         assert dejsonize(r)["failed"] == ["r26", "r27"]
-        assert "less than 256" in dejsonize(r)["errors"][0]
-        assert "less than 256" in dejsonize(r)["errors"][1]
+        assert "at most 255" in dejsonize(r)["errors"][0]
+        assert "at most 255" in dejsonize(r)["errors"][1]
 
         # Try adding records that are not even dicts or missing a key
         records = [
