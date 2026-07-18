@@ -436,8 +436,8 @@ def test_records():
         assert r.status == 200
         assert dejsonize(r)["accepted"] == []
         assert dejsonize(r)["failed"] == ["r28", "r29"]
-        assert "invalid literal" in dejsonize(r)["errors"][0]
-        assert "invalid literal" in dejsonize(r)["errors"][1]
+        assert "valid integer" in dejsonize(r)["errors"][0]
+        assert "valid integer" in dejsonize(r)["errors"][1]
         assert "not a dict with str" in dejsonize(r)["errors"][2]
         assert "not a dict with str" in dejsonize(r)["errors"][3]
 
