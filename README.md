@@ -1,176 +1,73 @@
-[![CI](https://github.com/almarklein/timetagger/workflows/CI/badge.svg)](https://github.com/almarklein/timetagger/actions)
-[![Documentation Status](https://readthedocs.org/projects/timetagger/badge/?version=latest)](https://timetagger.readthedocs.io/en/latest/?badge=latest)
-[![PyPI version](https://badge.fury.io/py/timetagger.svg)](https://badge.fury.io/py/timetagger)
-
 # TimeTagger
 
-*Tag your time, get the insight* - an open source time-tracker with an
-interactive user experience and powerful reporting.
+*Tag your time, get the insight.* A time tracker with a native macOS menu bar app
+and a small self-hosted API server.
 
-* Website: https://timetagger.app
-* Docs: https://timetagger.readthedocs.io
-* CLI tool: https://github.com/almarklein/timetagger_cli
-* [TimeTagger_VSCodeExtension](https://github.com/Yamakaze-chan/TimeTagger_VSCodeExtension) (3d party)
+This fork has two parts:
 
+* **`macos/TimeTaggerBar`**: the client, a SwiftUI menu bar app (macOS 13+, Apple Silicon).
+  It has the running timer and today's total in the menu bar, start/stop/switch/resume, local and work
+  time zones, a history browser, an editable report with Copy table and CSV export, and it pauses the
+  running task while the Mac sleeps. Download the DMG from
+  [Releases](https://github.com/centralhardware/timetagger/releases).
+* **`server`**: the API server, in Kotlin with [Ktor](https://ktor.io). It stores everything in
+  PostgreSQL, including the login credentials, and speaks the TimeTagger v2 API at
+  `<prefix>api/v2/`. Tokens, password hashes and the database schema are compatible with the
+  earlier Python server, so an existing database keeps working.
 
-## Introduction
-
-TimeTagger is a web-based time-tracking solution that can run locally
-or on a server. It's aimed at individuals and freelancers, and has the
-following features:
-
-* Intuitive UI based around an interactive timeline.
-* Lightweight feel by use of tags rather than projects.
-* Reporting in PDF and CSV.
-* Set daily/weekly/monthly targets.
-* Integrated Pomodoro method (experimental).
-* Responsive: works well on small and large screens.
-* Sync between devices.
+The web app is gone: the menu bar app is the client.
 
 
-## Under the hood
-
-The server runs on async Python using
-[uvicorn](https://github.com/encode/uvicorn) and
-[asgineer](https://github.com/almarklein/asgineer) - which is fun and bloody fast.
-It uses [PostgreSQL](https://www.postgresql.org/) (via
-[asyncpg](https://github.com/MagicStack/asyncpg)) to store all data,
-including the login credentials. The connection string is provided via
-`TIMETAGGER_DB_URI` (see below).
-
-The client is a mix of HTML, CSS, Markdown, and ... Python!
-[PScript](https://github.com/flexxui/pscript) is used to compile the
-Python to JavaScript. This may be a bit idiosyncratic, but it's fun!
-Maybe I'll someday implement it in something that compiles down to Wasm :)
-
-
-## Install and run
-
-TimeTagger is implemented as a Python library that requires Python 3.6 or higher. The dependencies are listed in `requirements.txt` - these are installed automatically when you install TimeTagger with Pip.
+## Run the server
 
 ```
-# Install
-pip install -U timetagger
-
-# Run
-python -m timetagger
-```
-
-TimeTagger requires a PostgreSQL database. Point it at your database with
-`TIMETAGGER_DB_URI` (the tables are created automatically on first use):
-
-```
+cd server
+./gradlew fatJar
 export TIMETAGGER_DB_URI='postgresql://user:pass@localhost:5432/timetagger'
-python -m timetagger
+export TIMETAGGER_JWT_KEY='a-long-random-secret'
+java -jar build/libs/timetagger.jar
 ```
 
-If the server runs on your local machine, you can use single-user mode out-of-the-box.
-
-
-## Self-hosting your time tracker
-
-Docker images are provided via the [Github container registry](https://github.com/almarklein/timetagger/pkgs/container/timetagger),
-so you can use e.g. Docker-compose to easily host your own server.
-
-There are two variants, one that runs the server as root inside the container and a nonroot variant
-that runs as user 1000:
-- [docker-compose.yml](https://github.com/almarklein/timetagger/blob/main/deploy/docker-compose.yml)
-- [docker-compose.nonroot.yml](https://github.com/almarklein/timetagger/blob/main/deploy/docker-compose.nonroot.yml)
-
-See [this article](https://timetagger.app/articles/selfhost2/) for more information about self hosting.
-
-### Authentication using credentials
-
-If you want multiple users, or if the server is not on localhost, you can
-manage user credentials directly in the database using the CLI. Passwords
-are hashed with BCrypt before being stored:
+Pending migrations are applied on startup. Manage logins with:
 
 ```
-# Add or update a user (also works to change a password)
-python -m timetagger user-add alice s3cr3t-password
-
-# List users
-python -m timetagger user-list
-
-# Remove a user
-python -m timetagger user-remove alice
+java -jar timetagger.jar user-add <username> <password>
+java -jar timetagger.jar user-list
+java -jar timetagger.jar user-remove <username>
 ```
 
-For zero-downtime migration, the legacy `TIMETAGGER_CREDENTIALS` env var
-(format "<username>:<bcrypt-hash>") is still honored: any users listed there
-are seeded into the database on first login (without overwriting existing
-rows). New setups should use the `user-*` CLI commands instead.
-
-To run fully stateless (no volume), also set `TIMETAGGER_JWT_KEY` to a long
-random secret; otherwise the JWT signing key is persisted to `datadir/jwt.key`.
+Or use the Docker image `ghcr.io/centralhardware/timetagger` with
+[deploy/docker-compose.yml](deploy/docker-compose.yml).
 
 
-### Authentication using a reverse proxy
+## Configuration
 
-If you have a reverse proxy which already authenticates users (e.g. [Authelia](https://www.authelia.com)) and provides the username through a HTTP header, you can tell TimeTagger to use this information. To configure it there are three environment variables and command line arguments (see the
-[docs on config](https://timetagger.readthedocs.io/en/latest/libapi/)).
+Set with `TIMETAGGER_<NAME>` environment variables or `--<name>=<value>` arguments:
 
-```
-# Using command-line args
-python -m timetagger --proxy_auth_enabled=True --proxy_auth_trusted=127.0.0.1 --proxy_auth_header=X-Remote-User
-
-# Using environment variables
-export TIMETAGGER_PROXY_AUTH_ENABLED=True TIMETAGGER_PROXY_AUTH_TRUSTED=127.0.0.1 TIMETAGGER_PROXY_AUTH_HEADER=X-Remote-User
-python -m timetagger
-```
-
-
-## Show your support
-
-If you're self-hosting TimeTagger and want to support the project, you can:
-
-* Write something about TimeTagger in a blog post or social media (and link to `https://timetagger.app`). This helps search engines find it better.
-* Contribute improvements via Github.
-* For financial support you can take a subscription or donate (see the donation links on the side).
+| Name | Default | |
+|---|---|---|
+| `bind` | `127.0.0.1:8080` | address and port |
+| `db_uri` | (required) | `postgresql://user:pass@host:5432/db` |
+| `jwt_key` | ephemeral | token signing secret; without it sessions end on restart |
+| `log_level` | `info` | |
+| `proxy_auth_enabled` | `false` | trust a username header from a reverse proxy |
+| `proxy_auth_trusted` | `127.0.0.1` | trusted proxy IPs/CIDRs, comma separated |
+| `proxy_auth_header` | `X-Remote-User` | |
+| `path_prefix` | `/timetagger/` | |
 
 
-## Using the hosted version
+## API
 
-You can also make use of https://timetagger.app so you don't have to worry about
-maintaining a server, backups, and all that. An account is just €3 per month.
-With that you'd also sponsor this project and open source in general.
+All endpoints except `bootstrap_authentication` need an `authtoken` header.
 
-
-## Copyright and license
-
-As usual, copyright applies to whomever made a particular contribution in this repository,
-which can be inspected via e.g. git blame. The owner of the copyright (i.e. the author)
-is free to use their code in any way.
-
-This code is also subject to the GPL-3.0 License, to protect it from being used
-commercially by other parties.
-
-Contributors must agree to the
-[Contributor License Agreement](https://github.com/almarklein/timetagger/blob/main/CLA.md)
-to grant me (Almar) the right to use their contributions at e.g. the TimeTagger.app service.
-By making a contribution to this project, you agree to this CLA.
+* `POST bootstrap_authentication`: base64 JSON `{"method": "usernamepassword", "username", "password"}`
+  (or `localhost` / `proxy`) → `{"token"}`, a web token valid for 14 days.
+* `GET webtoken`, `GET apitoken` (`?reset=1` revokes earlier tokens): need a web token.
+* `GET records?timerange=<t1>-<t2>[&running=][&hidden=][&tag=a,b]`, `PUT records`
+* `GET settings`, `PUT settings`, `GET updates?since=<ts>`, `PUT forcereset`, `GET version`
+* `GET <prefix>status` → `ok`
 
 
-## Developers
+## License
 
-Clone the repo and install in development mode:
-
-```sh
-git clone https://github.com/almarklein/timetagger.git
-cd timetagger
-pip install -e .
-```
-
-Install additional developer dependencies:
-
-```
-pip install invoke black flake8 pytest pytest-cov requests
-```
-
-Then these commands can be used during development:
-
-* `invoke -l` to see available invoke tasks
-* `invoke clean` to remove temporary files
-* `invoke format` to autoformat the code (using black)
-* `invoke lint` to detect linting errors (using flake8)
-* `invoke tests` to run tests (using pytest)
+GPL-3.0, see [LICENSE](LICENSE). Based on [TimeTagger](https://github.com/almarklein/timetagger) by Almar Klein.

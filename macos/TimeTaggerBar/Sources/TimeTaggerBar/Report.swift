@@ -149,6 +149,12 @@ struct ReportBuilder {
         return ReportRow(isHeader: false, cells: cells)
     }
 
+    /// The (possibly edited) table as CSV; every value is quoted, quotes are doubled.
+    static func csv(columns: [String], rows: [ReportRow]) -> String {
+        let quote = { (s: String) in "\"" + s.replacingOccurrences(of: "\"", with: "\"\"") + "\"" }
+        return ([columns] + rows.map(\.cells)).map { $0.map(quote).joined(separator: ",") }.joined(separator: "\n") + "\n"
+    }
+
     /// Puts the table on the pasteboard as TSV and HTML, so spreadsheets keep the columns.
     static func copy(columns: [String], rows: [ReportRow]) {
         let clean = { (s: String) in s.replacingOccurrences(of: "\t", with: " ").replacingOccurrences(of: "\n", with: " ") }
