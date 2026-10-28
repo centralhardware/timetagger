@@ -1,5 +1,4 @@
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct MenuView: View {
     @EnvironmentObject var store: Store
@@ -356,9 +355,6 @@ struct ReportView: View {
                 Button("Reset edits") { Task { await generate() } }
             }
             ToolbarItem {
-                Button("Save CSV…") { saveCSV() }
-            }
-            ToolbarItem {
                 Button {
                     ReportBuilder.copy(columns: builder.columns, rows: rows)
                     copied = true
@@ -371,24 +367,6 @@ struct ReportView: View {
         }
         .navigationTitle("Report")
         .task(id: options) { await generate() }
-    }
-
-    private func saveCSV() {
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.commaSeparatedText]
-        let (t1, t2) = options.period.range
-        let day = { (t: Int) in
-            let f = DateFormatter()
-            f.dateFormat = "yyyyMMdd"
-            return f.string(from: Date(timeIntervalSince1970: TimeInterval(t)))
-        }
-        panel.nameFieldStringValue = "timetagger-\(day(t1))-\(day(t2 - 1)).csv"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        do {
-            try ReportBuilder.csv(columns: builder.columns, rows: rows).write(to: url, atomically: true, encoding: .utf8)
-        } catch {
-            store.error = error.localizedDescription
-        }
     }
 
     private func generate() async {

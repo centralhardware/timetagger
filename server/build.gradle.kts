@@ -1,6 +1,6 @@
 plugins {
-    kotlin("jvm") version "2.2.21"
-    kotlin("plugin.serialization") version "2.2.21"
+    kotlin("jvm") version "2.3.21"
+    kotlin("plugin.serialization") version "2.3.21"
     application
 }
 
@@ -9,7 +9,7 @@ version = "27.0.0"
 
 repositories { mavenCentral() }
 
-val ktorVersion = "3.3.2"
+val ktorVersion = "3.5.1"
 
 dependencies {
     implementation("io.ktor:ktor-server-core:$ktorVersion")
@@ -27,9 +27,9 @@ dependencies {
     testImplementation("io.zonky.test:embedded-postgres:2.1.1")
 }
 
-java { targetCompatibility = JavaVersion.VERSION_21; sourceCompatibility = JavaVersion.VERSION_21 }
+java { targetCompatibility = JavaVersion.VERSION_25; sourceCompatibility = JavaVersion.VERSION_25 }
 
-kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21) } }
+kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_25) } }
 
 application { mainClass.set("timetagger.MainKt") }
 

@@ -7,7 +7,7 @@ This fork has two parts:
 
 * **`macos/TimeTaggerBar`**: the client, a SwiftUI menu bar app (macOS 13+, Apple Silicon).
   It has the running timer and today's total in the menu bar, start/stop/switch/resume, local and work
-  time zones, a history browser, an editable report with Copy table and CSV export, and it pauses the
+  time zones, a history browser, an editable report with Copy table, and it pauses the
   running task while the Mac sleeps. Download the DMG from
   [Releases](https://github.com/centralhardware/timetagger/releases).
 * **`server`**: the API server, in Kotlin with [Ktor](https://ktor.io). It stores everything in
