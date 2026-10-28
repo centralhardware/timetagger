@@ -183,6 +183,7 @@ struct API {
     }
 
     func version() async throws -> String {
-        String(decoding: try await send(URLRequest(url: try url("version")), auth: false), as: UTF8.self)
+        struct Version: Decodable { let version: String }
+        return try Self.decoder.decode(Version.self, from: try await send(URLRequest(url: try url("version")), auth: false)).version
     }
 }

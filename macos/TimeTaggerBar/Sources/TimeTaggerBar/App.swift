@@ -21,8 +21,10 @@ struct TimeTaggerBarApp: App {
             ReportView().environmentObject(store)
         }
 
-        Settings {
+        // A window of its own rather than a sheet in the menu, which is too short to show it whole.
+        Window("Settings", id: "settings") {
             SettingsView().environmentObject(store)
         }
+        .windowResizability(.contentSize)
     }
 }

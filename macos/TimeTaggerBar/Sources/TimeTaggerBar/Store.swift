@@ -47,8 +47,6 @@ final class Store: ObservableObject {
     @Published var running: [Record] = []
     @Published var error: String?
     @Published var lately: [Record] = []
-    /// Bumped after every write, so open windows know to reload.
-    @Published var revision = 0
     @Published var now = Int(Date().timeIntervalSince1970)
 
     private var tick: Timer?
@@ -192,7 +190,6 @@ final class Store: ObservableObject {
     private func save(_ recs: [Record]) async {
         do {
             try await api.put(recs)
-            revision += 1
             await refresh()
         } catch {
             self.error = error.localizedDescription

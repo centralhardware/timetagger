@@ -1,3 +1,4 @@
+import ServiceManagement
 import SwiftUI
 
 struct MenuView: View {
@@ -5,10 +6,7 @@ struct MenuView: View {
     @Environment(\.openWindow) private var openWindow
     @State private var draft = ""
     @State private var editing: Record?
-    @State private var showSettings = false
-    /// The day the list shows: today whenever the menu opens, ‹ › to move.
-    @State private var day = Calendar.current.startOfDay(for: Date())
-    @State private var dayRecords: [Record] = []
+    @StateObject private var feed = DayFeed()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -42,7 +40,10 @@ struct MenuView: View {
                 Menu {
                     Text("TimeTaggerBar \(Store.appVersion)")
                     Divider()
-                    Button("Settings…") { showSettings = true }
+                    Button("Settings…") {
+                        openWindow(id: "settings")
+                        NSApp.activate(ignoringOtherApps: true)
+                    }
                     Button("Refresh") { Task { await store.refresh() } }
                     Divider()
                     Button("Quit TimeTaggerBar") { NSApp.terminate(nil) }
@@ -59,45 +60,37 @@ struct MenuView: View {
         .sheet(item: $editing) { r in
             EditRecordView(record: r).environmentObject(store)
         }
-        .sheet(isPresented: $showSettings) {
-            SettingsView().environmentObject(store).padding()
-        }
-        .onAppear { day = Calendar.current.startOfDay(for: Date()) }
-        // Reload when the day changes and whenever the store has refreshed (a write here or anywhere else).
-        .task(id: "\(day.timeIntervalSince1970)-\(store.lately.hashValue)") { await loadDay() }
+        // Reload whenever the store has refreshed (a write here or anywhere else).
+        .task(id: store.lately.hashValue) { await load { try await feed.reload(store.api) } }
     }
 
-    private var isToday: Bool { Calendar.current.isDateInToday(day) }
-
+    /// Today first, older days below, loading further back as the end scrolls into view.
     private var daySection: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Button { move(-1) } label: { Image(systemName: "chevron.left") }
-                    .accessibilityLabel("Previous day")
-                Text(isToday ? "Today" : day.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated)))
-                    .font(.callout.weight(.semibold))
-                Button { move(1) } label: { Image(systemName: "chevron.right") }
-                    .disabled(isToday)
-                    .accessibilityLabel("Next day")
-                Spacer()
-                Text(Store.format(dayRecords.reduce(0) { $0 + $1.duration(now: store.now) }, seconds: false))
-                    .monospacedDigit().foregroundStyle(.secondary)
-            }
-            .buttonStyle(.borderless)
-            .padding(.horizontal, 6)
-
-            if dayRecords.isEmpty {
-                Text("No records").foregroundStyle(.secondary).font(.callout)
-                    .frame(maxWidth: .infinity, minHeight: 60)
-            } else {
-                ScrollView {
-                    VStack(spacing: 0) {
-                        ForEach(dayRecords) { r in dayRow(r) }
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: .sectionHeaders) {
+                ForEach(feed.days()) { day in
+                    Section {
+                        ForEach(day.records) { r in dayRow(r) }
+                    } header: {
+                        HStack {
+                            Text(Calendar.current.isDateInToday(day.id) ? "Today" : day.id.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated)))
+                                .font(.caption.weight(.semibold))
+                            Spacer()
+                            Text(Store.format(day.records.reduce(0) { $0 + $1.duration(now: store.now) }, seconds: false))
+                                .font(.caption).monospacedDigit()
+                        }
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6).padding(.vertical, 4)
+                        .background(.regularMaterial)
                     }
                 }
-                .frame(maxHeight: 260)
+                if !feed.reachedEnd {
+                    ProgressView().controlSize(.small).frame(maxWidth: .infinity).padding(8)
+                        .onAppear { Task { await load { try await feed.loadMore(store.api) } } }
+                }
             }
         }
+        .frame(height: 300)
     }
 
     private func dayRow(_ r: Record) -> some View {
@@ -128,89 +121,8 @@ struct MenuView: View {
         }
     }
 
-    private func move(_ days: Int) {
-        day = Calendar.current.date(byAdding: .day, value: days, to: day)!
-    }
-
-    private func loadDay() async {
-        let t1 = Int(day.timeIntervalSince1970)
-        let t2 = Int(Calendar.current.date(byAdding: .day, value: 1, to: day)!.timeIntervalSince1970)
-        do {
-            // Records that started this day, newest first.
-            dayRecords = try await store.api.records(from: t1, to: t2)
-                .filter { !$0.isDeleted && $0.t1 >= t1 && $0.t1 < t2 }
-                .sorted { $0.t1 > $1.t1 }
-        } catch {
-            store.error = error.localizedDescription
-        }
-    }
-
-    private func runningCard(_ r: Record) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label("Tracking", systemImage: "circle.fill")
-                .font(.caption.weight(.semibold)).textCase(.uppercase)
-                .foregroundStyle(.red)
-            HStack(spacing: 14) {
-                Text("Since **\(store.clock(r.t1))** local")
-                if store.showsWorkZone {
-                    Text("**\(store.clock(r.t1, work: true))** \(store.workZoneName) · work")
-                }
-            }
-            .font(.callout).foregroundStyle(.secondary).monospacedDigit()
-            Text(Store.format(r.duration(now: store.now)))
-                .font(.system(size: 44, weight: .light)).monospacedDigit()
-            Text(r.ds.isEmpty ? "(no description)" : r.ds).font(.headline).lineLimit(2)
-            HStack(spacing: 8) {
-                Button { Task { await store.stop(r) } } label: {
-                    Label("Stop", systemImage: "stop.fill").frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent).tint(.red).controlSize(.large)
-                Button { editing = r } label: { Image(systemName: "pencil") }
-                    .controlSize(.large)
-                    .accessibilityLabel("Edit current record")
-            }
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.background, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-    }
-
-    private var idleCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("Not tracking").font(.caption.weight(.semibold)).textCase(.uppercase).foregroundStyle(.secondary)
-                Spacer()
-                Text("**\(store.clock(store.now))** local")
-                if store.showsWorkZone { Text("**\(store.clock(store.now, work: true))** \(store.workZoneName)") }
-            }
-            .font(.callout).monospacedDigit()
-            taskField("What are you working on? #tag", icon: nil)
-            Button(action: startDraft) {
-                Label("Start", systemImage: "play.fill").frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent).controlSize(.large)
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.background, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-    }
-
-    private func taskField(_ prompt: String, icon: String?) -> some View {
-        HStack(spacing: 8) {
-            if let icon { Image(systemName: icon).foregroundStyle(.secondary) }
-            TextField(prompt, text: $draft)
-                .textFieldStyle(.plain)
-                .onSubmit(startDraft)
-        }
-        .padding(.horizontal, 12)
-        .frame(height: 38)
-        .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-    }
-
-    private func startDraft() {
-        let ds = draft
-        draft = ""
-        Task { await store.start(ds) }
+    private func load(_ op: () async throws -> Void) async {
+        do { try await op() } catch { store.error = error.localizedDescription }
     }
 }
 
@@ -277,7 +189,9 @@ struct EditRecordView: View {
 
 struct SettingsView: View {
     @EnvironmentObject var store: Store
-    @Environment(\.dismiss) private var dismiss
+    @State private var openAtLogin = SMAppService.mainApp.status == .enabled
+    @State private var loginError = ""
+    @State private var serverVersion = "…"
     @State private var url = ""
     @State private var username = ""
     @State private var password = ""
@@ -317,14 +231,33 @@ struct SettingsView: View {
                 Toggle("Show work time next to local time", isOn: $store.showWorkTime)
                 Toggle("Pause the running task while the Mac sleeps", isOn: $store.pauseOnSleep)
             }
-            HStack {
-                Spacer()
-                Button("Done") { dismiss() }
+            Section("General") {
+                Toggle("Open at login", isOn: $openAtLogin)
+                    .onChange(of: openAtLogin) { on in setOpenAtLogin(on) }
+                if !loginError.isEmpty { Text(loginError).font(.caption).foregroundStyle(.red) }
+            }
+            Section("About") {
+                LabeledContent("TimeTaggerBar", value: Store.appVersion)
+                LabeledContent("Server", value: serverVersion)
             }
         }
         .formStyle(.grouped)
-        .frame(width: 420)
+        // Sized to its content: everything shows at once, no scrolling.
+        .scrollDisabled(true)
+        .frame(width: 440)
+        .fixedSize(horizontal: false, vertical: true)
         .onAppear { url = store.serverURL; username = store.username }
+        .task(id: store.serverURL) { serverVersion = (try? await store.api.version()) ?? "unreachable" }
+    }
+
+    private func setOpenAtLogin(_ on: Bool) {
+        do {
+            if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+            loginError = ""
+        } catch {
+            loginError = error.localizedDescription
+            openAtLogin = SMAppService.mainApp.status == .enabled
+        }
     }
 
     private func signIn() {
@@ -454,25 +387,12 @@ struct ReportView: View {
 
 struct HistoryView: View {
     @EnvironmentObject var store: Store
-    @State private var from = Calendar.current.date(byAdding: .day, value: -6, to: Calendar.current.startOfDay(for: Date()))!
-    @State private var to = Date()
     @State private var search = ""
-    @State private var records: [Record] = []
     @State private var editing: Record?
-
-    private struct Day: Identifiable {
-        let id: Date
-        let records: [Record]
-    }
-
-    private var days: [Day] {
-        let q = search.lowercased()
-        let shown = records.filter { q.isEmpty || $0.ds.lowercased().contains(q) }
-        let groups = Dictionary(grouping: shown) { Calendar.current.startOfDay(for: Date(timeIntervalSince1970: TimeInterval($0.t1))) }
-        return groups.keys.sorted(by: >).map { Day(id: $0, records: groups[$0]!.sorted { $0.t1 > $1.t1 }) }
-    }
+    @StateObject private var feed = DayFeed()
 
     var body: some View {
+        let days = feed.days(matching: search)
         List {
             ForEach(days) { day in
                 Section {
@@ -497,15 +417,18 @@ struct HistoryView: View {
                     }
                 }
             }
+            // Scrolling to the end reaches further back.
+            if !feed.reachedEnd {
+                ProgressView().controlSize(.small).frame(maxWidth: .infinity)
+                    .onAppear { Task { await load { try await feed.loadMore(store.api) } } }
+            }
         }
         .overlay {
-            if days.isEmpty { Text("No records").foregroundStyle(.secondary) }
+            if days.isEmpty && feed.reachedEnd { Text("No records").foregroundStyle(.secondary) }
         }
         .searchable(text: $search, prompt: "Search description or #tag")
         .toolbar {
             ToolbarItemGroup {
-                DatePicker("From", selection: $from, displayedComponents: .date)
-                DatePicker("To", selection: $to, displayedComponents: .date)
                 Button {
                     let t = Int(Date().timeIntervalSince1970)
                     editing = Record(key: Record.newKey(), rev: 0, t1: t - 3600, t2: t, ds: "", deleted: 0)
@@ -517,7 +440,7 @@ struct HistoryView: View {
         .sheet(item: $editing) { r in
             EditRecordView(record: r).environmentObject(store)
         }
-        .task(id: "\(from)-\(to)-\(store.revision)") { await load() }
+        .task(id: store.lately.hashValue) { await load { try await feed.reload(store.api) } }
     }
 
     private func row(_ r: Record) -> some View {
@@ -539,14 +462,7 @@ struct HistoryView: View {
         .padding(.vertical, 2)
     }
 
-    private func load() async {
-        let cal = Calendar.current
-        let t1 = Int(cal.startOfDay(for: from).timeIntervalSince1970)
-        let t2 = Int(cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: to))!.timeIntervalSince1970)
-        do {
-            records = try await store.api.records(from: t1, to: t2).filter { !$0.isDeleted }
-        } catch {
-            store.error = error.localizedDescription
-        }
+    private func load(_ op: () async throws -> Void) async {
+        do { try await op() } catch { store.error = error.localizedDescription }
     }
 }
