@@ -50,9 +50,6 @@ struct MenuView: View {
                     NSApp.activate(ignoringOtherApps: true)
                 }
                 Menu {
-                    Text("App \(Store.appVersion)")
-                    Text("Server \(store.serverVersion)")
-                    Divider()
                     Button("Settings…") {
                         openWindow(id: "settings")
                         NSApp.activate(ignoringOtherApps: true)
