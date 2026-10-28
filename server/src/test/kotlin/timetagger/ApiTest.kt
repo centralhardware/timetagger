@@ -1,5 +1,10 @@
 package timetagger
 
+import timetagger.auth.PasswordService
+import timetagger.config.Config
+import timetagger.db.CredentialRepository
+import timetagger.db.Database
+
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
@@ -28,17 +33,17 @@ import kotlin.test.assertTrue
 
 class ApiTest {
     private lateinit var pg: EmbeddedPostgres
-    private lateinit var db: Db
+    private lateinit var db: Database
     private val config = Config(jwtKey = "test-key")
 
     @BeforeTest
     fun setUp() {
         pg = EmbeddedPostgres.start()
-        db = Db("postgresql://postgres:postgres@localhost:${pg.port}/postgres")
+        db = Database("postgresql://postgres:postgres@localhost:${pg.port}/postgres")
         runBlocking {
             db.migrate()
             db.migrate() // idempotent
-            Credentials(db).set("alice", "secret")
+            PasswordService(db, CredentialRepository()).set("alice", "secret")
         }
     }
 
@@ -147,6 +152,6 @@ class ApiTest {
                 )
             }
         }
-        assertTrue(Credentials(db).verify("py", "secret"))
+        assertTrue(PasswordService(db, CredentialRepository()).verify("py", "secret"))
     }
 }

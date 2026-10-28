@@ -40,6 +40,21 @@ Or use the Docker image `ghcr.io/centralhardware/timetagger` with
 [deploy/docker-compose.yml](deploy/docker-compose.yml).
 
 
+## Server layout
+
+`server/src/main/kotlin/timetagger/`:
+
+* `routes/`: one file per resource, mounted in `Application.kt` (`loginRoutes`, `tokenRoutes`,
+  `recordRoutes`, `settingRoutes`, `syncRoutes`)
+* `service/SyncService`: reads and writes records and settings and applies the sync rules
+  (newest `mt` wins, strictly increasing server times, reset handling)
+* `auth/`: tokens (`JwtCodec`, `TokenService`), passwords, login methods, and the `authtoken`
+  header as a Ktor authentication provider
+* `db/`: the connection pool and migrations (`Database`) and one repository per table
+* `model/`: the `@Serializable` items and responses, and the lenient item parser
+* errors are `ApiException`s, which `StatusPages` turns into plain-text responses
+
+
 ## Configuration
 
 Set with `TIMETAGGER_<NAME>` environment variables or `--<name>=<value>` arguments:

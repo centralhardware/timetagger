@@ -1,4 +1,4 @@
-package timetagger
+package timetagger.config
 
 /**
  * Server configuration, read from `TIMETAGGER_*` environment variables
