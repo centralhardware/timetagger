@@ -100,13 +100,12 @@ final class Store: ObservableObject {
         // Give Wi-Fi a moment to come back.
         try? await Task.sleep(nanoseconds: 5_000_000_000)
         let t = Int(Date().timeIntervalSince1970)
-        let resumed = toResume.map { Record(key: Record.newKey(), mt: t, t1: t, t2: t, ds: $0.ds, deleted: 0) }
+        let resumed = toResume.map { Record(key: Record.newKey(), rev: 0, t1: t, t2: t, ds: $0.ds, deleted: 0) }
         await save(stoppedCopies(toResume, at: sleptAt) + resumed)
     }
 
     private func stoppedCopies(_ recs: [Record], at t: Int) -> [Record] {
-        let mt = Int(Date().timeIntervalSince1970)
-        return recs.map { var r = $0; r.t2 = max(t, r.t1 + 1); r.mt = mt; return r }
+        recs.map { var r = $0; r.t2 = max(t, r.t1 + 1); return r }
     }
 
     var api: API { API(baseURL: serverURL, token: token) }
@@ -189,9 +188,8 @@ final class Store: ObservableObject {
     }
 
     private func save(_ recs: [Record]) async {
-        let mt = Int(Date().timeIntervalSince1970)
         do {
-            try await api.put(recs.map { var r = $0; r.mt = mt; return r })
+            try await api.put(recs)
             revision += 1
             await refresh()
         } catch {
@@ -203,7 +201,7 @@ final class Store: ObservableObject {
     func start(_ description: String) async {
         let t = Int(Date().timeIntervalSince1970)
         let stopped = running.map { r -> Record in var r = r; r.t2 = max(t, r.t1 + 1); return r }
-        let new = Record(key: Record.newKey(), mt: t, t1: t, t2: t, ds: description.trimmingCharacters(in: .whitespaces), deleted: 0)
+        let new = Record(key: Record.newKey(), rev: 0, t1: t, t2: t, ds: description.trimmingCharacters(in: .whitespaces), deleted: 0)
         await save(stopped + [new])
     }
 

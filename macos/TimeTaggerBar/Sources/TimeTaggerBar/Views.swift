@@ -439,7 +439,7 @@ struct HistoryView: View {
                 DatePicker("To", selection: $to, displayedComponents: .date)
                 Button {
                     let t = Int(Date().timeIntervalSince1970)
-                    editing = Record(key: Record.newKey(), mt: t, t1: t - 3600, t2: t, ds: "", deleted: 0)
+                    editing = Record(key: Record.newKey(), rev: 0, t1: t - 3600, t2: t, ds: "", deleted: 0)
                 } label: { Label("Add record", systemImage: "plus") }
             }
         }

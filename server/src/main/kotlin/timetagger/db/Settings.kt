@@ -6,15 +6,13 @@ import kotliquery.queryOf
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import timetagger.model.Setting
-import java.time.Instant
 
 class SettingRepository {
-    private val select = "SELECT \"key\", value::text AS value, modified_at, revision FROM settings"
+    private val select = "SELECT \"key\", value::text AS value, revision FROM settings"
 
     private fun setting(row: Row) = Setting(
         key = row.string("key"),
         value = Json.parseToJsonElement(row.string("value")),
-        modifiedAt = row.instant("modified_at"),
         revision = row.long("revision"),
     )
 
@@ -27,15 +25,15 @@ class SettingRepository {
     fun changedSince(session: Session, userId: Long, revision: Long): List<Setting> =
         session.list(queryOf("$select WHERE user_id = ? AND revision > ? ORDER BY revision", userId, revision), ::setting)
 
-    fun save(session: Session, userId: Long, key: String, value: JsonElement, modifiedAt: Instant): Setting {
+    fun save(session: Session, userId: Long, key: String, value: JsonElement): Setting {
         session.update(
             queryOf(
                 """
-                INSERT INTO settings (user_id, "key", value, modified_at) VALUES (:user, :key, CAST(:value AS jsonb), :modified)
+                INSERT INTO settings (user_id, "key", value) VALUES (:user, :key, CAST(:value AS jsonb))
                 ON CONFLICT (user_id, "key") DO UPDATE SET
-                    value = EXCLUDED.value, modified_at = EXCLUDED.modified_at, updated_at = now(), revision = nextval('revision_seq')
+                    value = EXCLUDED.value, updated_at = now(), revision = nextval('revision_seq')
                 """,
-                mapOf("user" to userId, "key" to key, "value" to value.toString(), "modified" to modifiedAt),
+                mapOf("user" to userId, "key" to key, "value" to value.toString()),
             ),
         )
         return get(session, userId, key)!!

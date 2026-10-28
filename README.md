@@ -91,9 +91,10 @@ Everything except `version` and `sessions` needs `Authorization: Bearer <token>`
 | `GET changes?since=<revision>` | everything written after that revision, deletes included |
 | `GET version`, `GET <prefix>status` | |
 
-A record is `{id, start, stop, description, tags, deletedAt, modifiedAt, revision}`; it is
-running while `stop` is null. A write with a `modifiedAt` older than the stored one gets
-409 with the stored record in `current`.
+A record is `{id, start, stop, description, tags, deletedAt, revision}`; it is
+running while `stop` is null. A write may carry the `revision` it was based on: if the
+record has changed since, it gets 409 with the stored record in `current`. Without one
+it overwrites.
 
 
 ## License

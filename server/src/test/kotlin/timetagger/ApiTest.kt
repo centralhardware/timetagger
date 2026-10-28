@@ -101,7 +101,7 @@ class ApiTest {
         suspend fun list(q: String) = client.get("$API/records?$q") { header("Authorization", "Bearer $t") }
             .obj()["records"]!!.jsonArray.map { it.jsonObject["id"]!!.jsonPrimitive.long }
 
-        val a = create("""{"start":"2026-10-28T08:00:00Z","stop":"2026-10-28T09:00:00Z","description":"code #Work","modifiedAt":"2026-10-28T09:00:00Z"}""")
+        val a = create("""{"start":"2026-10-28T08:00:00Z","stop":"2026-10-28T09:00:00Z","description":"code #Work"}""")
         assertEquals(listOf("work"), client.get("$API/records/$a") { header("Authorization", "Bearer $t") }.obj()["tags"]!!.jsonArray.map { it.jsonPrimitive.content })
         val b = create("""{"start":"2026-10-28T10:00:00Z","description":"run #work #x"}""")
         assertEquals(b, a + 1)
@@ -118,10 +118,12 @@ class ApiTest {
         assertEquals(listOf(b), list("from=2026-11-01T00:00:00Z&to=2026-11-02T00:00:00Z"))
         assertEquals(HttpStatusCode.UnprocessableEntity, client.get("$API/records?from=yesterday&to=now") { header("Authorization", "Bearer $t") }.status)
 
-        // An older edit is refused with the current record.
-        val stale = send("PUT", "records/$a", """{"start":"2026-10-28T08:00:00Z","description":"old","modifiedAt":"2026-10-27T00:00:00Z"}""")
+        // An edit based on an old revision is refused with the current record; the current revision goes through.
+        val aRev = client.get("$API/records/$a") { header("Authorization", "Bearer $t") }.obj()["revision"]!!.jsonPrimitive.long
+        val stale = send("PUT", "records/$a", """{"start":"2026-10-28T08:00:00Z","description":"old","revision":${aRev - 1}}""")
         assertEquals(HttpStatusCode.Conflict, stale.status)
         assertEquals("code #Work", stale.obj()["current"]!!.jsonObject["description"]!!.jsonPrimitive.content)
+        assertEquals(HttpStatusCode.OK, send("PUT", "records/$a", """{"start":"2026-10-28T08:00:00Z","stop":"2026-10-28T09:00:00Z","description":"code #Work","revision":$aRev}""").status)
 
         // Stop b and start a new one in one go; one bad entry rejects the whole batch.
         val batch = send("POST", "records/batch", """{"records":[{"id":$b,"start":"2026-10-28T10:00:00Z","stop":"2026-10-28T11:00:00Z","description":"run #work"},
@@ -155,6 +157,12 @@ class ApiTest {
         assertEquals(HttpStatusCode.OK, r.status)
         val s = client.get("$API/settings") { header("Authorization", "Bearer $t") }.obj()["settings"]!!.jsonArray
         assertEquals("2", s.single().jsonObject["value"]!!.jsonPrimitive.content)
+        // A write based on a stale revision leaves the stored value.
+        val rev = s.single().jsonObject["revision"]!!.jsonPrimitive.long
+        val stale = client.put("$API/settings/workdays") {
+            header("Authorization", "Bearer $t"); contentType(ContentType.Application.Json); setBody("""{"value":5,"revision":${rev - 1}}""")
+        }
+        assertEquals("2", stale.obj()["value"]!!.jsonPrimitive.content)
         assertEquals(HttpStatusCode.NotFound, client.get("$API/settings/none") { header("Authorization", "Bearer $t") }.status)
     }
 }

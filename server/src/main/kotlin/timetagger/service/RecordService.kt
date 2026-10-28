@@ -30,24 +30,21 @@ class RecordService(private val db: Database, private val records: RecordReposit
     suspend fun delete(userId: Long, id: String) = db.tx { session ->
         val cur = records.get(session, userId, recordId(id)) ?: throw NotFound("record $id")
         if (cur.deletedAt == null) {
-            val now = Instant.now()
-            records.update(session, userId, recordId(id), cur.start, cur.stop, cur.description, now, now)
+            records.update(session, userId, recordId(id), cur.start, cur.stop, cur.description, Instant.now())
         }
     }
 
     private fun create(session: Session, userId: Long, input: RecordInput): Record {
         validate(input)
-        val modifiedAt = input.modifiedAt ?: Instant.now()
-        return records.create(session, userId, input.start, input.stop, input.description.trim(), modifiedAt.takeIf { input.deleted }, modifiedAt)
+        return records.create(session, userId, input.start, input.stop, input.description.trim(), Instant.now().takeIf { input.deleted })
     }
 
     private fun update(session: Session, userId: Long, id: Long, input: RecordInput): Record {
         validate(input)
         val cur = records.get(session, userId, id) ?: throw NotFound("record $id")
-        val modifiedAt = input.modifiedAt ?: Instant.now()
-        if (cur.modifiedAt > modifiedAt) throw Conflict(cur)
-        val deletedAt = if (input.deleted) cur.deletedAt ?: modifiedAt else null
-        return records.update(session, userId, id, input.start, input.stop, input.description.trim(), deletedAt, modifiedAt)
+        if (input.revision != null && input.revision != cur.revision) throw Conflict(cur)
+        val deletedAt = if (input.deleted) cur.deletedAt ?: Instant.now() else null
+        return records.update(session, userId, id, input.start, input.stop, input.description.trim(), deletedAt)
     }
 
     private fun validate(input: RecordInput) {

@@ -13,8 +13,6 @@ data class Record(
     /** The #tags in the description, lower case, without the '#'. */
     val tags: List<String>,
     val deletedAt: IsoInstant?,
-    /** When a client last edited it; the newest edit wins. */
-    val modifiedAt: IsoInstant,
     /** Increases with every write; see GET /changes. */
     val revision: Long,
 )
@@ -31,8 +29,8 @@ data class RecordInput(
     val description: String = "",
     /** Marks the record deleted (or restores it with false). */
     val deleted: Boolean = false,
-    /** Defaults to now. An edit older than the stored one is rejected with 409. */
-    val modifiedAt: IsoInstant? = null,
+    /** The revision the client last read; if the record has moved on since, the write is rejected with 409. Omit to overwrite. */
+    val revision: Long? = null,
 )
 
 @Serializable
