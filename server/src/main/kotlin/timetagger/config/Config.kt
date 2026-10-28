@@ -12,7 +12,7 @@ data class Config(
     /** Secret for signing tokens. Empty means an ephemeral key: sessions end on restart. */
     val jwtKey: String = "",
     val logLevel: String = "info",
-    /** Path prefix the API is served under; always starts and ends with '/'. */
+    /** A second path the API is served under, besides the root; always starts and ends with '/'. */
     val pathPrefix: String = "/timetagger/",
 ) {
     val host: String get() = bind.substringBeforeLast(":")

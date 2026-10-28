@@ -24,6 +24,7 @@ import io.ktor.server.request.path
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
+import io.ktor.server.routing.Route
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import org.slf4j.LoggerFactory
@@ -117,16 +118,21 @@ fun Application.module(config: Config, db: Database) {
     }
 
     routing {
-        get("${config.pathPrefix}status") { call.respondText("ok") }
-        route("${config.pathPrefix}api/v1") {
-            get("version") { call.respond(VersionResponse(version())) }
-            authenticate(LOGIN) { sessionRoutes(services.tokens) }
-            authenticate(TOKEN) {
-                tokenRoutes(services.tokens)
-                recordRoutes(services.records)
-                settingRoutes(services.settings)
-                syncRoutes(services.sync)
-            }
+        // At the root, so the bare domain is the base URL, and under the prefix for clients set up with it.
+        for (prefix in setOf("/", config.pathPrefix)) route(prefix) { api(services) }
+    }
+}
+
+private fun Route.api(services: Services) {
+    get("status") { call.respondText("ok") }
+    route("api/v1") {
+        get("version") { call.respond(VersionResponse(version())) }
+        authenticate(LOGIN) { sessionRoutes(services.tokens) }
+        authenticate(TOKEN) {
+            tokenRoutes(services.tokens)
+            recordRoutes(services.records)
+            settingRoutes(services.settings)
+            syncRoutes(services.sync)
         }
     }
 }

@@ -36,7 +36,7 @@ enum Period: String, CaseIterable, Identifiable {
 
 @MainActor
 final class Store: ObservableObject {
-    @AppStorage("serverURL") var serverURL = "https://timetagger.app/timetagger"
+    @AppStorage("serverURL") var serverURL = "https://timetagger.centralhardware.me"
     @AppStorage("workTimeZone") var workTimeZoneID = "Europe/London"
     @AppStorage("showWorkTime") var showWorkTime = true
     @AppStorage("pauseOnSleep") var pauseOnSleep = true
