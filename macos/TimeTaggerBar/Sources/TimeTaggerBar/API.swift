@@ -82,20 +82,20 @@ struct API {
         if !resp.failed.isEmpty { throw APIError.http(200, resp.errors.joined(separator: "; ")) }
     }
 
-    /// Exchanges a username and password for a long-lived API token, the way the
-    /// web app's login page does: credentials → web token → API token.
+    /// Exchanges a username and password for a long-lived API token:
+    /// HTTP Basic login → web token → API token.
     static func login(baseURL: String, username: String, password: String) async throws -> String {
         struct Token: Decodable { let token: String }
-        var req = URLRequest(url: try API(baseURL: baseURL, token: "-").url("bootstrap_authentication"))
+        var req = URLRequest(url: try API(baseURL: baseURL, token: "-").url("login"))
         req.httpMethod = "POST"
-        let creds = ["method": "usernamepassword", "username": username, "password": password]
-        req.httpBody = try JSONEncoder().encode(creds).base64EncodedData()
+        let basic = Data("\(username):\(password)".utf8).base64EncodedString()
+        req.setValue("Basic \(basic)", forHTTPHeaderField: "Authorization")
         let (data, resp) = try await URLSession.shared.data(for: req)
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-        guard code == 200 else { throw APIError.http(code, String(decoding: data, as: UTF8.self)) }
+        guard code == 200 else { throw APIError.http(code, code == 401 ? "Wrong username or password" : String(decoding: data, as: UTF8.self)) }
         let webtoken = try JSONDecoder().decode(Token.self, from: data).token
-        let apiData = try await API(baseURL: baseURL, token: webtoken).send(URLRequest(url: try API(baseURL: baseURL, token: webtoken).url("apitoken")))
-        return try JSONDecoder().decode(Token.self, from: apiData).token
+        let web = API(baseURL: baseURL, token: webtoken)
+        return try JSONDecoder().decode(Token.self, from: try await web.send(URLRequest(url: try web.url("apitoken")))).token
     }
 
     func version() async throws -> String {

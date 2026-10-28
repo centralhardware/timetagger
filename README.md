@@ -44,12 +44,12 @@ Or use the Docker image `ghcr.io/centralhardware/timetagger` with
 
 `server/src/main/kotlin/timetagger/`:
 
-* `routes/`: one file per resource, mounted in `Application.kt` (`loginRoutes`, `tokenRoutes`,
+* `routes/`: one file per area, mounted in `Application.kt` (`loginRoutes`, `tokenRoutes`,
   `recordRoutes`, `settingRoutes`, `syncRoutes`)
 * `service/SyncService`: reads and writes records and settings and applies the sync rules
   (newest `mt` wins, strictly increasing server times, reset handling)
-* `auth/`: tokens (`JwtCodec`, `TokenService`), passwords, login methods, and the `authtoken`
-  header as a Ktor authentication provider
+* `auth/`: tokens (`JwtCodec`, `TokenService`) and passwords. Ktor's `basic` provider checks the
+  login and its `jwt` provider checks the `authtoken` header; only the seed/expiry check is ours
 * `db/`: the connection pool and migrations (`Database`) and one repository per table
 * `model/`: the `@Serializable` items and responses, and the lenient item parser
 * errors are `ApiException`s, which `StatusPages` turns into plain-text responses
@@ -65,18 +65,14 @@ Set with `TIMETAGGER_<NAME>` environment variables or `--<name>=<value>` argumen
 | `db_uri` | (required) | `postgresql://user:pass@host:5432/db` |
 | `jwt_key` | ephemeral | token signing secret; without it sessions end on restart |
 | `log_level` | `info` | |
-| `proxy_auth_enabled` | `false` | trust a username header from a reverse proxy |
-| `proxy_auth_trusted` | `127.0.0.1` | trusted proxy IPs/CIDRs, comma separated |
-| `proxy_auth_header` | `X-Remote-User` | |
 | `path_prefix` | `/timetagger/` | |
 
 
 ## API
 
-All endpoints except `bootstrap_authentication` need an `authtoken` header.
+All endpoints except `login` need an `authtoken` header.
 
-* `POST bootstrap_authentication`: base64 JSON `{"method": "usernamepassword", "username", "password"}`
-  (or `localhost` / `proxy`) → `{"token"}`, a web token valid for 14 days.
+* `POST login` with HTTP Basic credentials → `{"token"}`, a web token valid for 14 days.
 * `GET webtoken`, `GET apitoken` (`?reset=1` revokes earlier tokens): need a web token.
 * `GET records?timerange=<t1>-<t2>[&running=][&hidden=][&tag=a,b]`, `PUT records`
 * `GET settings`, `PUT settings`, `GET updates?since=<ts>`, `PUT forcereset`, `GET version`

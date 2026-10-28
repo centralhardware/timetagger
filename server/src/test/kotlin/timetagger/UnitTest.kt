@@ -1,8 +1,6 @@
 package timetagger
 
-import timetagger.auth.AuthException
 import timetagger.auth.AuthInfo
-import timetagger.auth.IpRanges
 import timetagger.auth.JwtCodec
 import timetagger.config.Config
 import timetagger.db.Database
@@ -23,23 +21,12 @@ class UnitTest {
     fun configFromEnvAndArgs() {
         val c = Config.load(
             listOf("--bind=0.0.0.0:80", "--path-prefix", "tt"),
-            mapOf("TIMETAGGER_BIND" to "1.2.3.4:9", "TIMETAGGER_PROXY_AUTH_ENABLED" to "yes"),
+            mapOf("TIMETAGGER_BIND" to "1.2.3.4:9"),
         )
         assertEquals("0.0.0.0", c.host)
         assertEquals(80, c.port)
         assertEquals("/tt/", c.pathPrefix)
-        assertTrue(c.proxyAuthEnabled)
         assertEquals("/", Config.toPathPrefix("/"))
-    }
-
-    @Test
-    fun ipRanges() {
-        val r = IpRanges("127.0.0.1, 10.99.0.0/24;192.168/16")
-        assertTrue(r.contains("127.0.0.1"))
-        assertTrue(r.contains("10.99.0.200"))
-        assertFalse(r.contains("10.99.1.1"))
-        assertTrue(r.contains("192.168.44.1"))
-        assertFalse(r.contains("192.169.0.1"))
     }
 
     @Test
@@ -50,7 +37,7 @@ class UnitTest {
         val tokens = JwtCodec("testkey")
         assertEquals(AuthInfo("alice", 32503748400, "abc"), tokens.decode(python))
         assertEquals(AuthInfo("bob", 1, "x"), tokens.decode(tokens.encode(AuthInfo("bob", 1, "x"))))
-        assertFailsWith<AuthException> { JwtCodec("otherkey").decode(python) }
+        assertEquals(null, JwtCodec("otherkey").decode(python))
     }
 
     @Test

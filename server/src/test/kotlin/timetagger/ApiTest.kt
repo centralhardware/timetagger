@@ -59,9 +59,8 @@ class ApiTest {
     }
 
     private suspend fun ApplicationTestBuilder.login(user: String = "alice", pw: String = "secret"): HttpResponse {
-        val body = """{"method":"usernamepassword","username":"$user","password":"$pw"}"""
-        return client.post("/timetagger/api/v2/bootstrap_authentication") {
-            setBody(Base64.getEncoder().encodeToString(body.toByteArray()))
+        return client.post("/timetagger/api/v2/login") {
+            header("Authorization", "Basic " + Base64.getEncoder().encodeToString("$user:$pw".toByteArray()))
         }
     }
 
@@ -70,7 +69,7 @@ class ApiTest {
 
     @Test
     fun loginAndTokens() = api {
-        assertEquals(HttpStatusCode.Forbidden, login(pw = "wrong").status)
+        assertEquals(HttpStatusCode.Unauthorized, login(pw = "wrong").status)
         val web = login().obj()["token"]!!.jsonPrimitive.content
         val apiToken = client.get("/timetagger/api/v2/apitoken") { header("authtoken", web) }.obj()["token"]!!.jsonPrimitive.content
         assertEquals(HttpStatusCode.OK, client.get("/timetagger/api/v2/version") { header("authtoken", apiToken) }.status)
@@ -80,7 +79,6 @@ class ApiTest {
         client.get("/timetagger/api/v2/apitoken?reset=1") { header("authtoken", web) }
         val revoked = client.get("/timetagger/api/v2/version") { header("authtoken", apiToken) }
         assertEquals(HttpStatusCode.Unauthorized, revoked.status)
-        assertTrue("revoked" in revoked.bodyAsText())
         assertEquals(HttpStatusCode.Unauthorized, client.get("/timetagger/api/v2/version").status)
         assertEquals("ok", client.get("/timetagger/status").bodyAsText())
         assertEquals(HttpStatusCode.NotFound, client.get("/timetagger/api/v2/nope") { header("authtoken", web) }.status)

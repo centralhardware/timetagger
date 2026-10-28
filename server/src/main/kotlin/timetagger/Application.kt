@@ -5,7 +5,11 @@ import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
 import io.ktor.server.application.install
 import io.ktor.server.auth.Authentication
+import io.ktor.server.auth.UserIdPrincipal
 import io.ktor.server.auth.authenticate
+import io.ktor.server.auth.basic
+import io.ktor.server.auth.jwt.jwt
+import io.ktor.http.auth.HttpAuthHeader
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.request.httpMethod
@@ -17,10 +21,8 @@ import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import kotlinx.serialization.json.Json
 import timetagger.auth.JwtCodec
-import timetagger.auth.LoginService
 import timetagger.auth.PasswordService
 import timetagger.auth.TokenService
-import timetagger.auth.token
 import timetagger.config.Config
 import timetagger.db.CredentialRepository
 import timetagger.db.Database
@@ -39,10 +41,13 @@ import timetagger.service.SyncService
 class Services(val config: Config, db: Database) {
     private val userInfo = UserInfoRepository()
     val passwords = PasswordService(db, CredentialRepository())
-    val tokens = TokenService(JwtCodec(config.jwtKey), db, userInfo)
-    val login = LoginService(config, passwords, tokens)
+    val jwt = JwtCodec(config.jwtKey)
+    val tokens = TokenService(jwt, db, userInfo)
     val sync = SyncService(db, RecordRepository(), SettingRepository(), userInfo)
 }
+
+private const val LOGIN = "login"
+private const val TOKEN = "token"
 
 fun version(): String = Database.resource("version.txt").trim()
 
@@ -52,9 +57,16 @@ fun Application.module(config: Config, db: Database) {
 
     install(ContentNegotiation) { json(Json { encodeDefaults = true; explicitNulls = true }) }
     install(Authentication) {
-        token {
-            tokens = services.tokens
-            proxyHeader = config.proxyAuthHeader.takeIf { config.proxyAuthEnabled }
+        basic(LOGIN) {
+            realm = "TimeTagger"
+            validate { c -> UserIdPrincipal(c.name.trim()).takeIf { services.passwords.verify(c.name, c.password) } }
+        }
+        jwt(TOKEN) {
+            // Clients send the bare token in an "authtoken" header rather than "Authorization: Bearer".
+            authHeader { call -> call.request.headers["authtoken"]?.takeIf { it.isNotBlank() }?.let { HttpAuthHeader.Single("Bearer", it.trim()) } }
+            verifier(services.jwt.verifier)
+            validate { services.tokens.validate(it.payload) }
+            challenge { _, _ -> call.respondText("unauthorized: missing, invalid, expired or revoked authtoken", status = HttpStatusCode.Unauthorized) }
         }
     }
     install(StatusPages) {
@@ -75,8 +87,8 @@ fun Application.module(config: Config, db: Database) {
         get("${config.pathPrefix}status") { call.respondText("ok") }
         route(api) {
             get { call.respondText("TimeTagger API v2") }
-            loginRoutes(services.login, config.proxyAuthHeader)
-            authenticate {
+            authenticate(LOGIN) { loginRoutes(services.tokens) }
+            authenticate(TOKEN) {
                 get("version") { call.respond(VersionResponse(version())) }
                 tokenRoutes(services.tokens)
                 recordRoutes(services.sync)
