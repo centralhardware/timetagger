@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import UserNotifications
 import AppKit
 
 enum Period: String, CaseIterable, Identifiable {
@@ -41,16 +42,36 @@ final class Store: ObservableObject {
     @AppStorage("showWorkTime") var showWorkTime = true
     @AppStorage("pauseOnSleep") var pauseOnSleep = true
     @AppStorage("username") var username = ""
-    @Published var token = Keychain.load()
+    /// Where a ticket tag like #sm-1061 opens; {key} becomes SM-1061. Empty turns the links off.
+    @AppStorage("ticketURL") var ticketURL = ""
+    @AppStorage("remindIdle") var remindIdle = true
+    @AppStorage("workStartHour") var workStartHour = 9
+    @AppStorage("workEndHour") var workEndHour = 18
+    /// Signed in while the keychain holds a refresh token; the server signing us out clears it.
+    @Published var signedIn = !Keychain.load().isEmpty
+    let session = AuthSession()
     @Published var period: Period = .today
     @Published var records: [Record] = []
     @Published var running: [Record] = []
-    @Published var recent: [String] = []
     @Published var error: String?
     @Published var lately: [Record] = []
-    /// Bumped after every write, so open windows know to reload.
-    @Published var revision = 0
-    private var recentDurations: [String: Int] = [:]
+    /// For autocomplete, most recently used first.
+    @Published var tags: [String] = []
+    @Published var serverVersion = "…"
+    /// A newer release than this app, when GitHub has one.
+    @Published var update: (version: String, url: URL)?
+    /// The last change made from this app, until it is undone or goes stale.
+    @Published var undoable: Change?
+    private var lastNagged = 0
+
+    struct Change {
+        let label: String
+        /// The records as they were, keyed by id; a record missing here was created by the change.
+        let before: [String: Record]
+        /// The records as the server saved them.
+        let after: [Record]
+        let at: Int
+    }
     @Published var now = Int(Date().timeIntervalSince1970)
 
     private var tick: Timer?
@@ -61,8 +82,16 @@ final class Store: ObservableObject {
 
     init() {
         tick = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.now = Int(Date().timeIntervalSince1970) }
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.now = Int(Date().timeIntervalSince1970)
+                // Undo is offered for a while, not forever.
+                if let u = self.undoable, self.now - u.at > 30 { self.undoable = nil }
+                if self.now % 60 == 0 { self.nagIfIdle() }
+            }
         }
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        Task { await checkForUpdate() }
         // Changes arrive through watchChanges(); the poll only covers a stream that is down.
         poll = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
@@ -120,7 +149,11 @@ final class Store: ObservableObject {
         recs.map { var r = $0; r.t2 = max(t, r.t1 + 1); return r }
     }
 
-    var api: API { API(baseURL: serverURL, token: token) }
+    var api: API { API(baseURL: serverURL, session: session) }
+
+    static var appVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+    }
 
     var workTimeZone: TimeZone { TimeZone(identifier: workTimeZoneID) ?? .current }
 
@@ -140,11 +173,6 @@ final class Store: ObservableObject {
     /// The second time zone is only worth showing when it differs from the Mac's.
     var showsWorkZone: Bool {
         showWorkTime && workTimeZone.secondsFromGMT() != TimeZone.current.secondsFromGMT()
-    }
-
-    /// The last few distinct descriptions, with the duration each took last time.
-    var resumable: [(String, Int)] {
-        recent.prefix(3).map { ds in (ds, recentDurations[ds] ?? 0) }
     }
 
     var todayTotal: Int {
@@ -177,36 +205,79 @@ final class Store: ObservableObject {
     }
 
     func refresh() async {
+        guard signedIn else { return }
         do {
             let (t1, t2) = period.range
             records = try await api.records(from: t1, to: t2)
                 .filter { !$0.isDeleted }
                 .sorted { $0.t1 > $1.t1 }
-            // Running records and recent descriptions come from the last 30 days.
+            // Running records and today's total come from the last 30 days.
             let n = Int(Date().timeIntervalSince1970)
             lately = try await api.records(from: n - 30 * 86400, to: n + 86400).filter { !$0.isDeleted }
             running = lately.filter(\.isRunning)
-            var seen = Set<String>()
-            let sorted = lately.sorted { $0.t1 > $1.t1 }
-            recent = sorted.filter { !$0.isRunning }.map(\.ds)
-                .filter { !$0.isEmpty && seen.insert($0).inserted }
-                .prefix(10).map { $0 }
-            recentDurations = [:]
-            for r in sorted.reversed() where !r.isRunning { recentDurations[r.ds] = r.duration() }
+            // Autocomplete is a nicety: a server without the endpoint just offers none.
+            tags = (try? await api.tags()) ?? tags
+            serverVersion = (try? await api.version()) ?? "unreachable"
             error = nil
+        } catch APIError.signedOut {
+            signedOutLocally()
+            self.error = APIError.signedOut.localizedDescription
         } catch {
             self.error = error.localizedDescription
         }
     }
 
-    private func save(_ recs: [Record]) async {
+    private func save(_ recs: [Record], label: String? = nil, before: [Record] = []) async {
         do {
-            try await api.put(recs)
-            revision += 1
+            let saved = try await api.put(recs)
+            if let label {
+                undoable = Change(label: label, before: Dictionary(before.map { ($0.key, $0) }) { a, _ in a },
+                                  after: saved, at: Int(Date().timeIntervalSince1970))
+            }
             await refresh()
         } catch {
             self.error = error.localizedDescription
         }
+    }
+
+    /// Puts back what the last change touched: edited records as they were, created ones deleted.
+    func undo() async {
+        guard let u = undoable else { return }
+        undoable = nil
+        let restore = u.after.map { saved -> Record in
+            guard var old = u.before[saved.key] else { var r = saved; r.deleted = 1; return r }
+            old.rev = saved.rev
+            return old
+        }
+        await save(restore)
+    }
+
+    /// A notification when nothing is tracked during working hours on a weekday, at most every 30 minutes.
+    private func nagIfIdle() {
+        guard remindIdle, signedIn, running.isEmpty else { return }
+        let cal = Calendar.current
+        let date = Date(timeIntervalSince1970: TimeInterval(now))
+        let hour = cal.component(.hour, from: date)
+        guard !cal.isDateInWeekend(date), hour >= workStartHour, hour < workEndHour else { return }
+        // Give a short break a chance, and don't repeat too often.
+        let lastStop = lately.map(\.t2).max() ?? 0
+        guard now - lastStop > 15 * 60, now - lastNagged > 30 * 60 else { return }
+        lastNagged = now
+        let content = UNMutableNotificationContent()
+        content.title = "Not tracking"
+        content.body = "Nothing has been running for \(Self.format(now - lastStop, seconds: false))."
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "idle", content: content, trigger: nil))
+    }
+
+    func checkForUpdate() async {
+        guard let latest = try? await API.latestRelease() else { return }
+        update = latest.version.compare(Self.appVersion, options: .numeric) == .orderedDescending ? latest : nil
+    }
+
+    /// The link for a ticket tag such as "sm-1061", if a ticket URL is set and the tag looks like a key.
+    func ticketLink(_ tag: String) -> URL? {
+        guard !ticketURL.isEmpty, tag.range(of: #"^[a-z][a-z0-9]*-\d+$"#, options: .regularExpression) != nil else { return nil }
+        return URL(string: ticketURL.replacingOccurrences(of: "{key}", with: tag.uppercased()))
     }
 
     /// Starts a new record, stopping whatever is running (like the web app's default).
@@ -214,40 +285,45 @@ final class Store: ObservableObject {
         let t = Int(Date().timeIntervalSince1970)
         let stopped = running.map { r -> Record in var r = r; r.t2 = max(t, r.t1 + 1); return r }
         let new = Record(key: Record.newKey(), rev: 0, t1: t, t2: t, ds: description.trimmingCharacters(in: .whitespaces), deleted: 0)
-        await save(stopped + [new])
+        await save(stopped + [new], label: "Started \u{201C}\(new.ds)\u{201D}", before: running)
     }
 
     func stop(_ record: Record? = nil) async {
         let t = Int(Date().timeIntervalSince1970)
         let targets = record.map { [$0] } ?? running
-        await save(targets.map { var r = $0; r.t2 = max(t, r.t1 + 1); return r })
+        await save(targets.map { var r = $0; r.t2 = max(t, r.t1 + 1); return r }, label: "Stopped", before: targets)
     }
 
-    func update(_ record: Record) async { await save([record]) }
+    func update(_ record: Record) async {
+        await save([record], label: "Edited", before: (lately + records).filter { $0.key == record.key })
+    }
 
     func delete(_ record: Record) async {
         var r = record
         r.deleted = 1
-        await save([r])
+        await save([r], label: "Deleted \u{201C}\(record.ds)\u{201D}", before: [record])
     }
 
     func signIn(url: String, username: String, password: String) async throws {
-        let token = try await API.login(baseURL: url, username: username, password: password)
+        try await API(baseURL: url, session: session).login(username: username, password: password)
         serverURL = url
         self.username = username
-        self.token = token
-        Keychain.save(token)
+        signedIn = true
         await refresh()
     }
 
-    func signOut() {
-        token = ""
+    func signOut() async {
+        await api.logout()
+        signedOutLocally()
+    }
+
+    /// What's left to do once the session is gone, by choice or because the server ended it.
+    private func signedOutLocally() {
+        signedIn = false
         username = ""
-        Keychain.save("")
         running = []
         records = []
         lately = []
-        recent = []
     }
 
     nonisolated static func format(_ secs: Int, seconds: Bool = true) -> String {

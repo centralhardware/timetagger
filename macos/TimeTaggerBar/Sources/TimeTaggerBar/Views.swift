@@ -1,3 +1,4 @@
+import ServiceManagement
 import SwiftUI
 
 struct MenuView: View {
@@ -5,12 +6,24 @@ struct MenuView: View {
     @Environment(\.openWindow) private var openWindow
     @State private var draft = ""
     @State private var editing: Record?
-    @State private var showSettings = false
+    @StateObject private var feed = DayFeed()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             if let err = store.error {
                 Text(err).font(.caption).foregroundStyle(.red).lineLimit(3)
+            }
+            if let u = store.undoable {
+                HStack {
+                    Text(u.label).lineLimit(1).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Undo") { Task { await store.undo() } }
+                        .keyboardShortcut("z", modifiers: .command)
+                }
+                .font(.callout)
+            }
+            if let u = store.update {
+                Link("TimeTaggerBar \(u.version) is available", destination: u.url).font(.callout)
             }
 
             if let r = store.running.first {
@@ -20,24 +33,7 @@ struct MenuView: View {
                 idleCard
             }
 
-            if !store.resumable.isEmpty {
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("Resume").font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.horizontal, 6)
-                    ForEach(store.resumable, id: \.0) { ds, secs in
-                        Button { Task { await store.start(ds) } } label: {
-                            HStack {
-                                Text(ds).lineLimit(1)
-                                Spacer()
-                                Text(Store.format(secs, seconds: false)).monospacedDigit().foregroundStyle(.secondary)
-                            }
-                            .padding(.horizontal, 6)
-                            .frame(height: 36)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
+            daySection
 
             Divider()
 
@@ -54,7 +50,13 @@ struct MenuView: View {
                     NSApp.activate(ignoringOtherApps: true)
                 }
                 Menu {
-                    Button("Settings…") { showSettings = true }
+                    Text("App \(Store.appVersion)")
+                    Text("Server \(store.serverVersion)")
+                    Divider()
+                    Button("Settings…") {
+                        openWindow(id: "settings")
+                        NSApp.activate(ignoringOtherApps: true)
+                    }
                     Button("Refresh") { Task { await store.refresh() } }
                     Divider()
                     Button("Quit TimeTaggerBar") { NSApp.terminate(nil) }
@@ -71,8 +73,65 @@ struct MenuView: View {
         .sheet(item: $editing) { r in
             EditRecordView(record: r).environmentObject(store)
         }
-        .sheet(isPresented: $showSettings) {
-            SettingsView().environmentObject(store).padding()
+        // Reload whenever the store has refreshed (a write here or anywhere else).
+        .task(id: store.lately.hashValue) { await load { try await feed.reload(store.api) } }
+    }
+
+    /// Today first, older days below, loading further back as the end scrolls into view.
+    private var daySection: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: .sectionHeaders) {
+                ForEach(feed.days()) { day in
+                    Section {
+                        ForEach(day.records) { r in dayRow(r) }
+                    } header: {
+                        HStack {
+                            Text(Calendar.current.isDateInToday(day.id) ? "Today" : day.id.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated)))
+                                .font(.caption.weight(.semibold))
+                            Spacer()
+                            Text(Store.format(day.records.reduce(0) { $0 + $1.duration(now: store.now) }, seconds: false))
+                                .font(.caption).monospacedDigit()
+                        }
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6).padding(.vertical, 4)
+                        .background(.regularMaterial)
+                    }
+                }
+                if !feed.reachedEnd {
+                    ProgressView().controlSize(.small).frame(maxWidth: .infinity).padding(8)
+                        .onAppear { Task { await load { try await feed.loadMore(store.api) } } }
+                }
+            }
+        }
+        .frame(height: 300)
+    }
+
+    private func dayRow(_ r: Record) -> some View {
+        HStack(spacing: 8) {
+            Text(store.clock(r.t1) + "–" + (r.isRunning ? "now" : store.clock(r.t2)))
+                .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                .frame(width: 82, alignment: .leading)
+            Text(r.ds.isEmpty ? "(no description)" : r.ds).lineLimit(1)
+            Spacer()
+            Text(Store.format(r.duration(now: store.now), seconds: false)).monospacedDigit().foregroundStyle(.secondary)
+            if !r.isRunning {
+                Button { Task { await store.start(r.ds) } } label: { Image(systemName: "play.fill") }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Resume \(r.ds)")
+            }
+        }
+        .font(.callout)
+        .padding(.horizontal, 6)
+        .frame(height: 32)
+        .contentShape(Rectangle())
+        .onTapGesture { editing = r }
+        .contextMenu {
+            Button("Edit…") { editing = r }
+            Button("Resume") { Task { await store.start(r.ds) } }
+            if r.isRunning { Button("Stop") { Task { await store.stop(r) } } }
+            TicketLinks(record: r)
+            Divider()
+            Button("Delete", role: .destructive) { Task { await store.delete(r) } }
         }
     }
 
@@ -127,21 +186,149 @@ struct MenuView: View {
     }
 
     private func taskField(_ prompt: String, icon: String?) -> some View {
-        HStack(spacing: 8) {
-            if let icon { Image(systemName: icon).foregroundStyle(.secondary) }
-            TextField(prompt, text: $draft)
-                .textFieldStyle(.plain)
-                .onSubmit(startDraft)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                if let icon { Image(systemName: icon).foregroundStyle(.secondary) }
+                TextField(prompt, text: $draft)
+                    .textFieldStyle(.plain)
+                    .onSubmit(startDraft)
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 38)
+            .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            TagSuggestions(text: $draft, tags: store.tags)
         }
-        .padding(.horizontal, 12)
-        .frame(height: 38)
-        .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     private func startDraft() {
         let ds = draft
         draft = ""
         Task { await store.start(ds) }
+    }
+
+    private func load(_ op: () async throws -> Void) async {
+        do { try await op() } catch { store.error = error.localizedDescription }
+    }
+}
+
+/// Signed-in devices and API keys for scripts, each revocable on its own.
+struct AccessSection: View {
+    @EnvironmentObject var store: Store
+    @State private var sessions: [API.SignedInSession] = []
+    @State private var keys: [API.ApiKey] = []
+    @State private var newKeyName = ""
+    /// A just-created key, shown until the window closes: the server never shows it again.
+    @State private var created: API.ApiKey?
+    @State private var problem = ""
+
+    var body: some View {
+        Section("Signed-in devices") {
+            ForEach(sessions) { s in
+                LabeledContent(s.userAgent ?? "Unknown device") {
+                    HStack {
+                        Text(s.lastRefreshedAt, format: .relative(presentation: .named)).foregroundStyle(.secondary)
+                        Button("Sign Out") { run { try await store.api.endSession(s.id) } }
+                    }
+                }
+            }
+        }
+        Section("API keys") {
+            ForEach(keys) { k in
+                LabeledContent(k.name) {
+                    HStack {
+                        Text("\(k.prefix)…").font(.caption.monospaced()).foregroundStyle(.secondary)
+                        Button("Revoke") { run { try await store.api.revokeApiKey(k.id) } }
+                    }
+                }
+            }
+            if let key = created?.key {
+                HStack {
+                    Text(key).font(.caption.monospaced()).textSelection(.enabled).lineLimit(1).truncationMode(.middle)
+                    Button("Copy") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(key, forType: .string)
+                    }
+                }
+                Text("Copy it now: it won't be shown again.").font(.caption).foregroundStyle(.secondary)
+            }
+            HStack {
+                TextField("New key name", text: $newKeyName, prompt: Text("e.g. merge cron"))
+                Button("Create") {
+                    let name = newKeyName
+                    run {
+                        created = try await store.api.createApiKey(name: name)
+                        newKeyName = ""
+                    }
+                }
+            }
+            if !problem.isEmpty { Text(problem).font(.caption).foregroundStyle(.red) }
+        }
+        .task { await load() }
+    }
+
+    private func run(_ op: @escaping () async throws -> Void) {
+        Task {
+            do { try await op(); problem = "" } catch { problem = error.localizedDescription }
+            await load()
+        }
+    }
+
+    private func load() async {
+        do {
+            sessions = try await store.api.sessions()
+            keys = try await store.api.apiKeys()
+        } catch {
+            problem = error.localizedDescription
+        }
+    }
+}
+
+/// "Open SM-1061" for every ticket tag on the record, when a ticket URL is set.
+struct TicketLinks: View {
+    @EnvironmentObject var store: Store
+    let record: Record
+
+    var body: some View {
+        ForEach(record.tags.compactMap { t in store.ticketLink(t).map { (t, $0) } }, id: \.0) { tag, url in
+            Link("Open \(tag.uppercased())", destination: url)
+        }
+    }
+}
+
+/// Tags that complete the #word being typed at the end of `text`; clicking one fills it in.
+struct TagSuggestions: View {
+    @Binding var text: String
+    let tags: [String]
+
+    var body: some View {
+        let matches = Self.matches(for: text, in: tags)
+        if !matches.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(matches, id: \.self) { tag in
+                        Button("#" + tag) { text = Self.complete(text, with: tag) }
+                            .buttonStyle(.bordered).controlSize(.small)
+                    }
+                }
+            }
+        }
+    }
+
+    /// The partial tag at the end of the text, without '#', or nil when the last word isn't one.
+    static func partial(_ text: String) -> String? {
+        guard let last = text.split(separator: " ", omittingEmptySubsequences: false).last, last.hasPrefix("#") else { return nil }
+        return last.dropFirst().lowercased()
+    }
+
+    static func matches(for text: String, in tags: [String]) -> [String] {
+        guard let p = partial(text) else { return [] }
+        return Array(tags.filter { $0.hasPrefix(p) && $0 != p }.prefix(5))
+    }
+
+    static func complete(_ text: String, with tag: String) -> String {
+        var words = text.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
+        words[words.count - 1] = "#" + tag
+        return words.joined(separator: " ") + " "
     }
 }
 
@@ -180,6 +367,7 @@ struct EditRecordView: View {
     var body: some View {
         Form {
             TextField("Description", text: $record.ds)
+            TagSuggestions(text: $record.ds, tags: store.tags)
             DatePicker("Start", selection: $start)
             Toggle("Running", isOn: $running)
             if !running { DatePicker("End", selection: $end) }
@@ -208,7 +396,8 @@ struct EditRecordView: View {
 
 struct SettingsView: View {
     @EnvironmentObject var store: Store
-    @Environment(\.dismiss) private var dismiss
+    @State private var openAtLogin = SMAppService.mainApp.status == .enabled
+    @State private var loginError = ""
     @State private var url = ""
     @State private var username = ""
     @State private var password = ""
@@ -218,7 +407,7 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section("Account") {
-                if store.token.isEmpty {
+                if !store.signedIn {
                     TextField("Server", text: $url, prompt: Text("https://timetagger.example.com"))
                     TextField("Username", text: $username)
                         .textContentType(.username)
@@ -237,7 +426,7 @@ struct SettingsView: View {
                     LabeledContent("Signed in as", value: store.username.isEmpty ? "—" : store.username)
                     HStack {
                         Spacer()
-                        Button("Sign Out") { store.signOut() }
+                        Button("Sign Out") { Task { await store.signOut() } }
                     }
                 }
             }
@@ -248,14 +437,50 @@ struct SettingsView: View {
                 Toggle("Show work time next to local time", isOn: $store.showWorkTime)
                 Toggle("Pause the running task while the Mac sleeps", isOn: $store.pauseOnSleep)
             }
-            HStack {
-                Spacer()
-                Button("Done") { dismiss() }
+            if store.signedIn { AccessSection() }
+            Section("Reminders") {
+                Toggle("Remind me when nothing is tracked", isOn: $store.remindIdle)
+                if store.remindIdle {
+                    Stepper("Working hours from \(store.workStartHour):00", value: $store.workStartHour, in: 0...23)
+                    Stepper("to \(store.workEndHour):00, weekdays", value: $store.workEndHour, in: 1...24)
+                }
+            }
+            Section("Tickets") {
+                TextField("Ticket URL", text: $store.ticketURL, prompt: Text("https://company.atlassian.net/browse/{key}"))
+                Text("A tag like #sm-1061 links to this URL with {key} = SM-1061.").font(.caption).foregroundStyle(.secondary)
+            }
+            Section("General") {
+                Toggle("Open at login", isOn: $openAtLogin)
+                    .onChange(of: openAtLogin) { on in setOpenAtLogin(on) }
+                if !loginError.isEmpty { Text(loginError).font(.caption).foregroundStyle(.red) }
+            }
+            Section("About") {
+                LabeledContent("TimeTaggerBar", value: Store.appVersion)
+                LabeledContent("Server", value: store.serverVersion)
+                if let u = store.update {
+                    Link("Version \(u.version) is available", destination: u.url)
+                } else {
+                    Button("Check for Updates") { Task { await store.checkForUpdate() } }
+                }
             }
         }
         .formStyle(.grouped)
-        .frame(width: 420)
+        // Sized to its content: everything shows at once, no scrolling.
+        .scrollDisabled(true)
+        .frame(width: 440)
+        .fixedSize(horizontal: false, vertical: true)
         .onAppear { url = store.serverURL; username = store.username }
+        .task(id: store.serverURL) { store.serverVersion = (try? await store.api.version()) ?? "unreachable" }
+    }
+
+    private func setOpenAtLogin(_ on: Bool) {
+        do {
+            if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+            loginError = ""
+        } catch {
+            loginError = error.localizedDescription
+            openAtLogin = SMAppService.mainApp.status == .enabled
+        }
     }
 
     private func signIn() {
@@ -385,25 +610,14 @@ struct ReportView: View {
 
 struct HistoryView: View {
     @EnvironmentObject var store: Store
-    @State private var from = Calendar.current.date(byAdding: .day, value: -6, to: Calendar.current.startOfDay(for: Date()))!
-    @State private var to = Date()
     @State private var search = ""
-    @State private var records: [Record] = []
     @State private var editing: Record?
-
-    private struct Day: Identifiable {
-        let id: Date
-        let records: [Record]
-    }
-
-    private var days: [Day] {
-        let q = search.lowercased()
-        let shown = records.filter { q.isEmpty || $0.ds.lowercased().contains(q) }
-        let groups = Dictionary(grouping: shown) { Calendar.current.startOfDay(for: Date(timeIntervalSince1970: TimeInterval($0.t1))) }
-        return groups.keys.sorted(by: >).map { Day(id: $0, records: groups[$0]!.sorted { $0.t1 > $1.t1 }) }
-    }
+    @StateObject private var feed = DayFeed()
+    /// Server-side matches for the search, across all time.
+    @State private var found: [Record]?
 
     var body: some View {
+        let days = found.map(DayFeed.group) ?? feed.days()
         List {
             ForEach(days) { day in
                 Section {
@@ -415,6 +629,7 @@ struct HistoryView: View {
                                 Button("Edit…") { editing = r }
                                 Button("Resume") { Task { await store.start(r.ds) } }
                                 if r.isRunning { Button("Stop") { Task { await store.stop(r) } } }
+                                TicketLinks(record: r)
                                 Divider()
                                 Button("Delete", role: .destructive) { Task { await store.delete(r) } }
                             }
@@ -428,15 +643,18 @@ struct HistoryView: View {
                     }
                 }
             }
+            // Scrolling to the end reaches further back.
+            if found == nil && !feed.reachedEnd {
+                ProgressView().controlSize(.small).frame(maxWidth: .infinity)
+                    .onAppear { Task { await load { try await feed.loadMore(store.api) } } }
+            }
         }
         .overlay {
-            if days.isEmpty { Text("No records").foregroundStyle(.secondary) }
+            if days.isEmpty && (found != nil || feed.reachedEnd) { Text("No records").foregroundStyle(.secondary) }
         }
         .searchable(text: $search, prompt: "Search description or #tag")
         .toolbar {
             ToolbarItemGroup {
-                DatePicker("From", selection: $from, displayedComponents: .date)
-                DatePicker("To", selection: $to, displayedComponents: .date)
                 Button {
                     let t = Int(Date().timeIntervalSince1970)
                     editing = Record(key: Record.newKey(), rev: 0, t1: t - 3600, t2: t, ds: "", deleted: 0)
@@ -448,7 +666,14 @@ struct HistoryView: View {
         .sheet(item: $editing) { r in
             EditRecordView(record: r).environmentObject(store)
         }
-        .task(id: "\(from)-\(to)-\(store.revision)") { await load() }
+        .task(id: store.lately.hashValue) { await load { try await feed.reload(store.api) } }
+        .task(id: "\(search)-\(store.lately.hashValue)") {
+            let q = search.trimmingCharacters(in: .whitespaces)
+            guard !q.isEmpty else { found = nil; return }
+            try? await Task.sleep(nanoseconds: 300_000_000)   // let the typing settle
+            guard !Task.isCancelled else { return }
+            await load { found = try await store.api.search(q).filter { !$0.isDeleted } }
+        }
     }
 
     private func row(_ r: Record) -> some View {
@@ -470,14 +695,7 @@ struct HistoryView: View {
         .padding(.vertical, 2)
     }
 
-    private func load() async {
-        let cal = Calendar.current
-        let t1 = Int(cal.startOfDay(for: from).timeIntervalSince1970)
-        let t2 = Int(cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: to))!.timeIntervalSince1970)
-        do {
-            records = try await store.api.records(from: t1, to: t2).filter { !$0.isDeleted }
-        } catch {
-            store.error = error.localizedDescription
-        }
+    private func load(_ op: () async throws -> Void) async {
+        do { try await op() } catch { store.error = error.localizedDescription }
     }
 }

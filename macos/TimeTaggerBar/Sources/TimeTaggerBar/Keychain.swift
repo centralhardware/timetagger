@@ -1,10 +1,10 @@
 import Foundation
 import Security
 
-/// Stores the API token in the login keychain.
+/// Stores the refresh token in the login keychain. (Access tokens live in memory only.)
 enum Keychain {
     private static let service = "TimeTaggerBar"
-    private static let account = "apitoken"
+    private static let account = "refreshtoken"
 
     static func load() -> String {
         let query: [String: Any] = [
