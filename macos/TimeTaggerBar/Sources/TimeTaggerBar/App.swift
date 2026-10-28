@@ -9,7 +9,7 @@ struct TimeTaggerBarApp: App {
             MenuView().environmentObject(store)
         } label: {
             Image(systemName: store.running.isEmpty ? "clock" : "clock.fill")
-            if !store.running.isEmpty { Text(store.menuTitle) }
+            Text(store.menuTitle).monospacedDigit()
         }
         .menuBarExtraStyle(.window)
 

@@ -92,9 +92,11 @@ final class Store: ObservableObject {
         return lately.reduce(0) { $0 + max(0, ($1.isRunning ? now : $1.t2) - max($1.t1, start)) }
     }
 
+    /// Menu bar text: today's total, preceded by the running timer when there is one.
     var menuTitle: String {
-        guard let r = running.first else { return "" }
-        return Self.format(r.duration(now: now), seconds: false)
+        let today = Self.format(todayTotal, seconds: false)
+        guard let r = running.first else { return today }
+        return Self.format(r.duration(now: now), seconds: false) + " · " + today
     }
 
     var totalsByTag: [(String, Int)] {
