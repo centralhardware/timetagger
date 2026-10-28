@@ -21,10 +21,10 @@ final class DayFeed: ObservableObject {
     private var emptyChunks = 0
     private var loading = false
 
-    func days(matching search: String = "") -> [Day] {
-        let q = search.lowercased()
-        let shown = records.filter { q.isEmpty || $0.ds.lowercased().contains(q) }
-        let groups = Dictionary(grouping: shown) { Calendar.current.startOfDay(for: Date(timeIntervalSince1970: TimeInterval($0.t1))) }
+    func days() -> [Day] { Self.group(records) }
+
+    nonisolated static func group(_ records: [Record]) -> [Day] {
+        let groups = Dictionary(grouping: records) { Calendar.current.startOfDay(for: Date(timeIntervalSince1970: TimeInterval($0.t1))) }
         return groups.keys.sorted(by: >).map { Day(id: $0, records: groups[$0]!.sorted { $0.t1 > $1.t1 }) }
     }
 

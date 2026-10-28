@@ -13,6 +13,18 @@ struct MenuView: View {
             if let err = store.error {
                 Text(err).font(.caption).foregroundStyle(.red).lineLimit(3)
             }
+            if let u = store.undoable {
+                HStack {
+                    Text(u.label).lineLimit(1).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Undo") { Task { await store.undo() } }
+                        .keyboardShortcut("z", modifiers: .command)
+                }
+                .font(.callout)
+            }
+            if let u = store.update {
+                Link("TimeTaggerBar \(u.version) is available", destination: u.url).font(.callout)
+            }
 
             if let r = store.running.first {
                 runningCard(r)
@@ -117,6 +129,7 @@ struct MenuView: View {
             Button("Edit…") { editing = r }
             Button("Resume") { Task { await store.start(r.ds) } }
             if r.isRunning { Button("Stop") { Task { await store.stop(r) } } }
+            TicketLinks(record: r)
             Divider()
             Button("Delete", role: .destructive) { Task { await store.delete(r) } }
         }
@@ -195,6 +208,18 @@ struct MenuView: View {
 
     private func load(_ op: () async throws -> Void) async {
         do { try await op() } catch { store.error = error.localizedDescription }
+    }
+}
+
+/// "Open SM-1061" for every ticket tag on the record, when a ticket URL is set.
+struct TicketLinks: View {
+    @EnvironmentObject var store: Store
+    let record: Record
+
+    var body: some View {
+        ForEach(record.tags.compactMap { t in store.ticketLink(t).map { (t, $0) } }, id: \.0) { tag, url in
+            Link("Open \(tag.uppercased())", destination: url)
+        }
     }
 }
 
@@ -340,6 +365,17 @@ struct SettingsView: View {
                 Toggle("Show work time next to local time", isOn: $store.showWorkTime)
                 Toggle("Pause the running task while the Mac sleeps", isOn: $store.pauseOnSleep)
             }
+            Section("Reminders") {
+                Toggle("Remind me when nothing is tracked", isOn: $store.remindIdle)
+                if store.remindIdle {
+                    Stepper("Working hours from \(store.workStartHour):00", value: $store.workStartHour, in: 0...23)
+                    Stepper("to \(store.workEndHour):00, weekdays", value: $store.workEndHour, in: 1...24)
+                }
+            }
+            Section("Tickets") {
+                TextField("Ticket URL", text: $store.ticketURL, prompt: Text("https://company.atlassian.net/browse/{key}"))
+                Text("A tag like #sm-1061 links to this URL with {key} = SM-1061.").font(.caption).foregroundStyle(.secondary)
+            }
             Section("General") {
                 Toggle("Open at login", isOn: $openAtLogin)
                     .onChange(of: openAtLogin) { on in setOpenAtLogin(on) }
@@ -348,6 +384,11 @@ struct SettingsView: View {
             Section("About") {
                 LabeledContent("TimeTaggerBar", value: Store.appVersion)
                 LabeledContent("Server", value: store.serverVersion)
+                if let u = store.update {
+                    Link("Version \(u.version) is available", destination: u.url)
+                } else {
+                    Button("Check for Updates") { Task { await store.checkForUpdate() } }
+                }
             }
         }
         .formStyle(.grouped)
@@ -499,9 +540,11 @@ struct HistoryView: View {
     @State private var search = ""
     @State private var editing: Record?
     @StateObject private var feed = DayFeed()
+    /// Server-side matches for the search, across all time.
+    @State private var found: [Record]?
 
     var body: some View {
-        let days = feed.days(matching: search)
+        let days = found.map(DayFeed.group) ?? feed.days()
         List {
             ForEach(days) { day in
                 Section {
@@ -513,6 +556,7 @@ struct HistoryView: View {
                                 Button("Edit…") { editing = r }
                                 Button("Resume") { Task { await store.start(r.ds) } }
                                 if r.isRunning { Button("Stop") { Task { await store.stop(r) } } }
+                                TicketLinks(record: r)
                                 Divider()
                                 Button("Delete", role: .destructive) { Task { await store.delete(r) } }
                             }
@@ -527,13 +571,13 @@ struct HistoryView: View {
                 }
             }
             // Scrolling to the end reaches further back.
-            if !feed.reachedEnd {
+            if found == nil && !feed.reachedEnd {
                 ProgressView().controlSize(.small).frame(maxWidth: .infinity)
                     .onAppear { Task { await load { try await feed.loadMore(store.api) } } }
             }
         }
         .overlay {
-            if days.isEmpty && feed.reachedEnd { Text("No records").foregroundStyle(.secondary) }
+            if days.isEmpty && (found != nil || feed.reachedEnd) { Text("No records").foregroundStyle(.secondary) }
         }
         .searchable(text: $search, prompt: "Search description or #tag")
         .toolbar {
@@ -550,6 +594,13 @@ struct HistoryView: View {
             EditRecordView(record: r).environmentObject(store)
         }
         .task(id: store.lately.hashValue) { await load { try await feed.reload(store.api) } }
+        .task(id: "\(search)-\(store.lately.hashValue)") {
+            let q = search.trimmingCharacters(in: .whitespaces)
+            guard !q.isEmpty else { found = nil; return }
+            try? await Task.sleep(nanoseconds: 300_000_000)   // let the typing settle
+            guard !Task.isCancelled else { return }
+            await load { found = try await store.api.search(q).filter { !$0.isDeleted } }
+        }
     }
 
     private func row(_ r: Record) -> some View {

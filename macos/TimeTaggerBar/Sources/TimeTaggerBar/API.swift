@@ -145,13 +145,32 @@ struct API {
 
     /// Writes the records in one transaction (e.g. stop one and start the next);
     /// records without a server id are created.
-    func put(_ records: [Record]) async throws {
+    @discardableResult
+    func put(_ records: [Record]) async throws -> [Record] {
         var req = URLRequest(url: try url("records/batch"))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        struct Batch: Encodable { let records: [WireRecord] }
+        struct Batch: Codable { let records: [WireRecord] }
         req.httpBody = try Self.encoder.encode(Batch(records: records.map(WireRecord.init)))
-        _ = try await send(req)
+        return try Self.decoder.decode(Batch.self, from: try await send(req)).records.map(\.record)
+    }
+
+    /// Records whose description contains `text`, across all time, newest first.
+    func search(_ text: String) async throws -> [Record] {
+        struct Resp: Decodable { let records: [WireRecord] }
+        let data = try await send(URLRequest(url: try url("records", [URLQueryItem(name: "q", value: text)])))
+        return try Self.decoder.decode(Resp.self, from: data).records.map(\.record).sorted { $0.t1 > $1.t1 }
+    }
+
+    /// The newest TimeTaggerBar release on GitHub: its version and page.
+    static func latestRelease() async throws -> (version: String, url: URL)? {
+        struct Release: Decodable { let tag_name: String; let html_url: URL; let draft: Bool; let prerelease: Bool }
+        let url = URL(string: "https://api.github.com/repos/centralhardware/timetagger/releases?per_page=20")!
+        let (data, _) = try await URLSession.shared.data(from: url)
+        let prefix = "macos-v"
+        return try JSONDecoder().decode([Release].self, from: data)
+            .first { !$0.draft && !$0.prerelease && $0.tag_name.hasPrefix(prefix) }
+            .map { (String($0.tag_name.dropFirst(prefix.count)), $0.html_url) }
     }
 
     /// Signs in with HTTP Basic and returns a long-lived API token: session → web token → API token.
