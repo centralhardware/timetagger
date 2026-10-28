@@ -22,4 +22,6 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 PLIST
 codesign --force --sign - "$APP"
 (cd build && ditto -c -k --keepParent TimeTaggerBar.app TimeTaggerBar.zip)
-echo "Built $APP"
+rm -rf build/dmg && mkdir build/dmg && cp -R "$APP" build/dmg/ && ln -s /Applications build/dmg/Applications
+hdiutil create -volname TimeTaggerBar -srcfolder build/dmg -ov -format UDZO build/TimeTaggerBar.dmg
+echo "Built $APP and build/TimeTaggerBar.dmg"

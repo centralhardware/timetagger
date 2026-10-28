@@ -16,4 +16,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: TimeTaggerBar
-          path: macos/TimeTaggerBar/build/TimeTaggerBar.zip
+          path: |
+            macos/TimeTaggerBar/build/TimeTaggerBar.dmg
+            macos/TimeTaggerBar/build/TimeTaggerBar.zip

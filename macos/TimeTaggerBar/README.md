@@ -7,5 +7,5 @@ A small native macOS menu bar client for TimeTagger (macOS 13+).
 - totals per tag for the chosen period
 - server URL + API token in Settings (token kept in the Keychain)
 
-Build: `./build-app.sh` → `build/TimeTaggerBar.app` (ad-hoc signed; first launch: right-click → Open).
+Build: `./build-app.sh` → `build/TimeTaggerBar.app` and `build/TimeTaggerBar.dmg` (ad-hoc signed; first launch: right-click → Open).
 CI builds the same zip as an artifact of the `macOS app` workflow.
