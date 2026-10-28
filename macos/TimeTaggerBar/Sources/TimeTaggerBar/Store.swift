@@ -178,7 +178,7 @@ final class Store: ObservableObject {
         await refresh()
     }
 
-    static func format(_ secs: Int, seconds: Bool = true) -> String {
+    nonisolated static func format(_ secs: Int, seconds: Bool = true) -> String {
         let h = secs / 3600, m = (secs % 3600) / 60, s = secs % 60
         return seconds ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", h, m)
     }
