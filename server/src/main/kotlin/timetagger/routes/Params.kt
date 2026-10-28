@@ -1,26 +1,25 @@
 package timetagger.routes
 
 import io.ktor.server.auth.principal
-import io.ktor.server.request.receiveText
 import io.ktor.server.routing.RoutingCall
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
+import timetagger.Invalid
 import timetagger.auth.AuthInfo
-import timetagger.badRequest
-
-private val FALSY = setOf("false", "off", "no", "n", "0")
-private const val BODY_MAX = 10 * 1024 * 1024
+import java.time.Instant
+import java.time.format.DateTimeParseException
 
 /** The authenticated user; only valid inside an authenticated route. */
-val RoutingCall.user: AuthInfo get() = principal<AuthInfo>()!!
+val RoutingCall.auth: AuthInfo get() = principal<AuthInfo>()!!
 
-/** A yes/no query flag: absent → null, a falsy word → false, anything else → true. */
-fun RoutingCall.flag(name: String): Boolean? =
-    request.queryParameters[name].orEmpty().trim().lowercase().let { if (it.isEmpty()) null else it !in FALSY }
+fun RoutingCall.path(name: String): String = parameters[name]!!
 
-/** The request body as a JSON list. Read as text, so clients need not set a content type. */
-suspend fun RoutingCall.receiveList(what: String): JsonArray {
-    val text = receiveText()
-    if (text.length > BODY_MAX) badRequest("body too large")
-    return runCatching { Json.parseToJsonElement(text) }.getOrNull() as? JsonArray ?: badRequest("list of $what must be a list")
+fun RoutingCall.boolParam(name: String): Boolean? = request.queryParameters[name]?.let {
+    it.toBooleanStrictOrNull() ?: throw Invalid("$name must be true or false")
+}
+
+fun RoutingCall.instantParam(name: String): Instant? = request.queryParameters[name]?.let {
+    try {
+        Instant.parse(it)
+    } catch (e: DateTimeParseException) {
+        throw Invalid("$name must be an ISO-8601 instant, e.g. 2026-10-28T00:00:00Z")
+    }
 }

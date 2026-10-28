@@ -11,9 +11,7 @@ This fork has two parts:
   running task while the Mac sleeps. Download the DMG from
   [Releases](https://github.com/centralhardware/timetagger/releases).
 * **`server`**: the API server, in Kotlin with [Ktor](https://ktor.io). It stores everything in
-  PostgreSQL, including the login credentials, and speaks the TimeTagger v2 API at
-  `<prefix>api/v2/`. Tokens, password hashes and the database schema are compatible with the
-  earlier Python server, so an existing database keeps working.
+  PostgreSQL, including the login credentials, and serves a REST API at `<prefix>api/v1/`.
 
 The web app is gone: the menu bar app is the client.
 
@@ -29,7 +27,7 @@ build/install/timetagger/bin/timetagger
 ```
 
 Pending Flyway migrations are applied on startup. A database from the Python server is adopted as
-version 4. Manage logins with:
+version 4 and converted to the v1 schema by V5. Manage logins with:
 
 ```
 timetagger user-add <username> <password>
@@ -45,16 +43,19 @@ Or use the Docker image `ghcr.io/centralhardware/timetagger` with
 
 `server/src/main/kotlin/timetagger/`:
 
-* `routes/`: one file per area, mounted in `Application.kt` (`loginRoutes`, `tokenRoutes`,
-  `recordRoutes`, `settingRoutes`, `syncRoutes`)
-* `service/SyncService`: reads and writes records and settings and applies the sync rules
-  (newest `mt` wins, strictly increasing server times, reset handling)
+* `routes/`: mounted in `Application.kt` (`sessionRoutes`, `tokenRoutes`, `recordRoutes`,
+  `settingRoutes`, `syncRoutes`)
+* `service/`: `RecordService`, `SettingService` (validation, newest edit wins) and `SyncService`
+  (changes since a revision)
 * `auth/`: tokens (`JwtCodec`, `TokenService`) and passwords. Ktor's `basic` provider checks the
-  login and its `jwt` provider checks the `authtoken` header; only the seed/expiry check is ours
+  login and its `jwt` provider the bearer token; only the revocation (seed) check is ours
 * `db/`: the connection pool (`Database`), Flyway migrations in `resources/db/migration`, and one
   [kotliquery](https://github.com/seratch/kotliquery) repository per table
-* `model/`: the `@Serializable` items and responses, and the lenient item parser
-* errors are `ApiException`s, which `StatusPages` turns into plain-text responses
+* `model/`: the `@Serializable` records, settings, inputs and responses
+* errors are `ApiException`s, which `StatusPages` turns into JSON error responses
+
+Tables: `users`, `records` (one row per record, `stop_at` NULL while running, `deleted_at` for
+deletes), `record_tags`, `settings`; every write takes a new value from `revision_seq`.
 
 
 ## Configuration
@@ -70,15 +71,29 @@ Set with `TIMETAGGER_<NAME>` environment variables or `--<name>=<value>` argumen
 | `path_prefix` | `/timetagger/` | |
 
 
-## API
+## API (v1)
 
-All endpoints except `login` need an `authtoken` header.
+Served at `<prefix>api/v1/`. JSON in and out, times in ISO-8601. Errors are
+`{"error": "<code>", "message": "..."}` with 401, 403, 404, 405, 409 or 422.
+Everything except `version` and `sessions` needs `Authorization: Bearer <token>`.
 
-* `POST login` with HTTP Basic credentials → `{"token"}`, a web token valid for 14 days.
-* `GET webtoken`, `GET apitoken` (`?reset=1` revokes earlier tokens): need a web token.
-* `GET records?timerange=<t1>-<t2>[&running=][&hidden=][&tag=a,b]`, `PUT records`
-* `GET settings`, `PUT settings`, `GET updates?since=<ts>`, `PUT forcereset`, `GET version`
-* `GET <prefix>status` → `ok`
+| | |
+|---|---|
+| `POST sessions` | HTTP Basic login → `{token, expiresAt}`, a web token valid for 14 days |
+| `POST tokens` | (web token) → a long-lived API token |
+| `DELETE tokens/{web\|api}` | revokes every token of that kind |
+| `GET me` | the signed-in user |
+| `GET records?from=&to=[&tag=a&tag=b][&running=][&deleted=]` | records overlapping the range |
+| `POST records` | creates a record → 201 with its numeric `id` |
+| `GET / PUT / DELETE records/{id}` | one record; DELETE marks it deleted |
+| `POST records/batch` | `{records: [...]}` in one transaction; entries with an `id` update, others create |
+| `GET settings`, `GET / PUT settings/{key}` | `{value}` is any JSON |
+| `GET changes?since=<revision>` | everything written after that revision, deletes included |
+| `GET version`, `GET <prefix>status` | |
+
+A record is `{id, start, stop, description, tags, deletedAt, modifiedAt, revision}`; it is
+running while `stop` is null. A write with a `modifiedAt` older than the stored one gets
+409 with the stored record in `current`.
 
 
 ## License

@@ -1,50 +1,52 @@
 package timetagger
 
-import timetagger.auth.PasswordService
-import timetagger.config.Config
-import timetagger.db.CredentialRepository
-import timetagger.db.Database
-
+import io.ktor.client.request.delete
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.put
+import io.ktor.client.request.request
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.ContentType
+import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.contentType
 import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
 import io.zonky.test.db.postgres.embedded.EmbeddedPostgres
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
+import org.flywaydb.core.Flyway
+import timetagger.auth.PasswordService
+import timetagger.config.Config
+import timetagger.db.Database
+import timetagger.db.UserRepository
 import java.util.Base64
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
+import kotlin.test.assertNull
+
+private const val API = "/timetagger/api/v1"
 
 class ApiTest {
     private lateinit var pg: EmbeddedPostgres
     private lateinit var db: Database
-    private val config = Config(jwtKey = "test-key")
 
     @BeforeTest
     fun setUp() {
         pg = EmbeddedPostgres.start()
         db = Database("postgresql://postgres:postgres@localhost:${pg.port}/postgres")
-        runBlocking {
-            db.migrate()
-            db.migrate() // idempotent
-            PasswordService(db, CredentialRepository()).set("alice", "secret")
-        }
+        db.migrate()
+        runBlocking { PasswordService(db, UserRepository()).set("alice", "secret") }
     }
 
     @AfterTest
@@ -54,122 +56,146 @@ class ApiTest {
     }
 
     private fun api(block: suspend ApplicationTestBuilder.() -> Unit) = testApplication {
-        application { module(config, db) }
+        application { module(Config(jwtKey = "test-key"), db) }
         block()
     }
 
-    private suspend fun ApplicationTestBuilder.login(user: String = "alice", pw: String = "secret"): HttpResponse {
-        return client.post("/timetagger/api/v2/login") {
-            header("Authorization", "Basic " + Base64.getEncoder().encodeToString("$user:$pw".toByteArray()))
-        }
-    }
+    private suspend fun ApplicationTestBuilder.login(user: String = "alice", pw: String = "secret") =
+        client.post("$API/sessions") { header("Authorization", "Basic " + Base64.getEncoder().encodeToString("$user:$pw".toByteArray())) }
 
-    private fun json(s: String) = Json.parseToJsonElement(s).jsonObject
-    private suspend fun HttpResponse.obj(): JsonObject = json(bodyAsText())
+    private suspend fun ApplicationTestBuilder.token() = login().obj()["token"]!!.jsonPrimitive.content
+
+    private suspend fun HttpResponse.obj(): JsonObject = Json.parseToJsonElement(bodyAsText()).jsonObject
 
     @Test
-    fun loginAndTokens() = api {
+    fun sessionsAndTokens() = api {
         assertEquals(HttpStatusCode.Unauthorized, login(pw = "wrong").status)
-        val web = login().obj()["token"]!!.jsonPrimitive.content
-        val apiToken = client.get("/timetagger/api/v2/apitoken") { header("authtoken", web) }.obj()["token"]!!.jsonPrimitive.content
-        assertEquals(HttpStatusCode.OK, client.get("/timetagger/api/v2/version") { header("authtoken", apiToken) }.status)
+        val web = token()
+        val apiToken = client.post("$API/tokens") { header("Authorization", "Bearer $web") }.obj()["token"]!!.jsonPrimitive.content
+        assertEquals("alice", client.get("$API/me") { header("Authorization", "Bearer $apiToken") }.obj()["username"]!!.jsonPrimitive.content)
         // An API token cannot mint more tokens.
-        assertEquals(HttpStatusCode.Forbidden, client.get("/timetagger/api/v2/webtoken") { header("authtoken", apiToken) }.status)
-        // Resetting the seed revokes earlier API tokens.
-        client.get("/timetagger/api/v2/apitoken?reset=1") { header("authtoken", web) }
-        val revoked = client.get("/timetagger/api/v2/version") { header("authtoken", apiToken) }
+        assertEquals(HttpStatusCode.Forbidden, client.post("$API/tokens") { header("Authorization", "Bearer $apiToken") }.status)
+        // Revoking API tokens leaves web tokens working.
+        assertEquals(HttpStatusCode.NoContent, client.delete("$API/tokens/api") { header("Authorization", "Bearer $web") }.status)
+        val revoked = client.get("$API/me") { header("Authorization", "Bearer $apiToken") }
         assertEquals(HttpStatusCode.Unauthorized, revoked.status)
-        assertEquals(HttpStatusCode.Unauthorized, client.get("/timetagger/api/v2/version").status)
+        assertEquals("unauthorized", revoked.obj()["error"]!!.jsonPrimitive.content)
+        assertEquals(HttpStatusCode.OK, client.get("$API/me") { header("Authorization", "Bearer $web") }.status)
+        assertEquals(HttpStatusCode.OK, client.get("$API/version").status)
         assertEquals("ok", client.get("/timetagger/status").bodyAsText())
-        assertEquals(HttpStatusCode.NotFound, client.get("/timetagger/api/v2/nope") { header("authtoken", web) }.status)
-        assertEquals(HttpStatusCode.MethodNotAllowed, client.put("/timetagger/api/v2/version") { header("authtoken", web) }.status)
+        assertEquals("not_found", client.get("$API/nope") { header("Authorization", "Bearer $web") }.obj()["error"]!!.jsonPrimitive.content)
     }
 
     @Test
-    fun recordsAndUpdates() = api {
-        val token = login().obj()["token"]!!.jsonPrimitive.content
-        suspend fun put(body: String) = client.put("/timetagger/api/v2/records") { header("authtoken", token); setBody(body) }.obj()
-        suspend fun get(q: String) = client.get("/timetagger/api/v2/records?$q") { header("authtoken", token) }.obj()["records"]!!.jsonArray
+    fun records() = api {
+        val t = token()
+        suspend fun send(method: String, path: String, body: String) = client.request("$API/$path") {
+            this.method = HttpMethod.parse(method)
+            header("Authorization", "Bearer $t"); contentType(ContentType.Application.Json); setBody(body)
+        }
+        suspend fun create(body: String): Long {
+            val r = send("POST", "records", body)
+            assertEquals(HttpStatusCode.Created, r.status, r.bodyAsText())
+            return r.obj()["id"]!!.jsonPrimitive.long.also { assertEquals("$API/records/$it", r.headers["Location"]) }
+        }
+        suspend fun list(q: String) = client.get("$API/records?$q") { header("Authorization", "Bearer $t") }
+            .obj()["records"]!!.jsonArray.map { it.jsonObject["id"]!!.jsonPrimitive.long }
 
-        val r = put(
-            """[{"key":"a","mt":10,"t1":100,"t2":200,"ds":"code #work"},
-                {"key":"b","mt":10,"t1":300,"t2":300,"ds":"run #work #x"},
-                {"key":"c","mt":10,"t1":400,"t2":500,"ds":"gone","deleted":1},
-                {"key":"bad","mt":10},
-                {"nokey":1}]""",
-        )
-        assertEquals(listOf("a", "b", "c"), r["accepted"]!!.jsonArray.map { it.jsonPrimitive.content })
-        assertEquals(listOf("bad"), r["failed"]!!.jsonArray.map { it.jsonPrimitive.content })
-        assertEquals(2, r["errors"]!!.jsonArray.size)
+        val a = create("""{"start":"2026-10-28T08:00:00Z","stop":"2026-10-28T09:00:00Z","description":"code #Work","modifiedAt":"2026-10-28T09:00:00Z"}""")
+        assertEquals(listOf("work"), client.get("$API/records/$a") { header("Authorization", "Bearer $t") }.obj()["tags"]!!.jsonArray.map { it.jsonPrimitive.content })
+        val b = create("""{"start":"2026-10-28T10:00:00Z","description":"run #work #x"}""")
+        assertEquals(b, a + 1)
+        assertEquals(HttpStatusCode.UnprocessableEntity, send("POST", "records", """{"start":"2026-10-28T10:00:00Z","stop":"2026-10-28T09:00:00Z"}""").status)
+        assertEquals(HttpStatusCode.UnprocessableEntity, send("POST", "records", """{"stop":"nope"}""").status)
+        assertEquals(HttpStatusCode.NotFound, send("PUT", "records/999", """{"start":"2026-10-28T10:00:00Z"}""").status)
+        assertEquals(HttpStatusCode.NotFound, client.get("$API/records/abc") { header("Authorization", "Bearer $t") }.status)
 
-        assertEquals(setOf("a", "b", "c"), get("timerange=0-1000").map { it.jsonObject["key"]!!.jsonPrimitive.content }.toSet())
-        assertEquals(listOf("b"), get("timerange=0-1000&running=1").map { it.jsonObject["key"]!!.jsonPrimitive.content })
-        assertEquals(listOf("c"), get("timerange=0-1000&hidden=yes").map { it.jsonObject["key"]!!.jsonPrimitive.content })
-        assertEquals(listOf("b"), get("timerange=0-1000&tag=x").map { it.jsonObject["key"]!!.jsonPrimitive.content })
-        assertEquals(2, get("timerange=0-1000&tag=%23work").size)
-        // A running record shows up for any later range.
-        assertEquals(listOf("b"), get("timerange=600-700").map { it.jsonObject["key"]!!.jsonPrimitive.content })
+        val day = "from=2026-10-28T00:00:00Z&to=2026-10-29T00:00:00Z"
+        assertEquals(listOf(a, b), list(day))
+        assertEquals(listOf(b), list("$day&running=true"))
+        assertEquals(listOf(b), list("$day&tag=x&tag=work"))
+        // A running record overlaps any later range.
+        assertEquals(listOf(b), list("from=2026-11-01T00:00:00Z&to=2026-11-02T00:00:00Z"))
+        assertEquals(HttpStatusCode.UnprocessableEntity, client.get("$API/records?from=yesterday&to=now") { header("Authorization", "Bearer $t") }.status)
 
-        // Older edits lose; newer ones win.
-        put("""[{"key":"a","mt":5,"t1":1,"t2":2,"ds":"old"}]""")
-        put("""[{"key":"b","mt":20,"t1":300,"t2":350,"ds":"run #work"}]""")
-        val byKey = get("timerange=0-1000").associate { it.jsonObject["key"]!!.jsonPrimitive.content to it.jsonObject }
-        assertEquals("code #work", byKey["a"]!!["ds"]!!.jsonPrimitive.content)
-        assertEquals(350, byKey["b"]!!["t2"]!!.jsonPrimitive.long)
+        // An older edit is refused with the current record.
+        val stale = send("PUT", "records/$a", """{"start":"2026-10-28T08:00:00Z","description":"old","modifiedAt":"2026-10-27T00:00:00Z"}""")
+        assertEquals(HttpStatusCode.Conflict, stale.status)
+        assertEquals("code #Work", stale.obj()["current"]!!.jsonObject["description"]!!.jsonPrimitive.content)
 
-        val all = client.get("/timetagger/api/v2/updates?since=0") { header("authtoken", token) }.obj()
+        // Stop b and start a new one in one go; one bad entry rejects the whole batch.
+        val batch = send("POST", "records/batch", """{"records":[{"id":$b,"start":"2026-10-28T10:00:00Z","stop":"2026-10-28T11:00:00Z","description":"run #work"},
+            {"start":"2026-10-28T11:00:00Z","description":"next"}]}""").obj()["records"]!!.jsonArray
+        val c = batch[1].jsonObject["id"]!!.jsonPrimitive.long
+        val badBatch = send("POST", "records/batch", """{"records":[{"start":"2026-10-28T12:00:00Z","description":"lost"},{"id":999,"start":"2026-10-28T12:00:00Z"}]}""")
+        assertEquals(HttpStatusCode.NotFound, badBatch.status)
+        assertEquals(listOf(a, b, c), list(day))
+        assertEquals(listOf(c), list("$day&running=true"))
+
+        assertEquals(HttpStatusCode.NoContent, client.delete("$API/records/$a") { header("Authorization", "Bearer $t") }.status)
+        assertEquals(listOf(b, c), list(day))
+        assertEquals(listOf(a), list("$day&deleted=true"))
+        assertEquals(HttpStatusCode.NotFound, client.delete("$API/records/12345") { header("Authorization", "Bearer $t") }.status)
+
+        // Sync: everything after a revision, deletes included.
+        val all = client.get("$API/changes") { header("Authorization", "Bearer $t") }.obj()
+        val rev = all["revision"]!!.jsonPrimitive.long
         assertEquals(3, all["records"]!!.jsonArray.size)
-        val serverTime = all["server_time"]!!.jsonPrimitive.content.toDouble()
-        val none = client.get("/timetagger/api/v2/updates?since=${serverTime + 1}") { header("authtoken", token) }.obj()
-        assertEquals(0, none["reset"]!!.jsonPrimitive.int)
-
-        client.put("/timetagger/api/v2/forcereset") { header("authtoken", token) }
-        val reset = client.get("/timetagger/api/v2/updates?since=1") { header("authtoken", token) }.obj()
-        assertEquals("true", reset["reset"]!!.jsonPrimitive.content)
-        assertEquals(3, reset["records"]!!.jsonArray.size)
+        send("PUT", "records/$c", """{"start":"2026-10-28T11:00:00Z","stop":"2026-10-28T11:30:00Z","description":"next"}""")
+        val after = client.get("$API/changes?since=$rev") { header("Authorization", "Bearer $t") }.obj()
+        assertEquals(listOf(c), after["records"]!!.jsonArray.map { it.jsonObject["id"]!!.jsonPrimitive.long })
     }
 
     @Test
     fun settings() = api {
-        val token = login().obj()["token"]!!.jsonPrimitive.content
-        client.put("/timetagger/api/v2/settings") {
-            header("authtoken", token)
-            setBody("""[{"key":"tag_colors","mt":1,"value":{"work":"#f00"}}]""")
+        val t = token()
+        val r = client.put("$API/settings/workdays") {
+            header("Authorization", "Bearer $t"); contentType(ContentType.Application.Json); setBody("""{"value":2}""")
         }
-        val s = client.get("/timetagger/api/v2/settings") { header("authtoken", token) }.obj()["settings"]!!.jsonArray
-        assertEquals("#f00", s.single().jsonObject["value"]!!.jsonObject["work"]!!.jsonPrimitive.content)
-    }
-
-    @Test
-    fun verifiesPasswordsHashedByThePythonServer() = runBlocking {
-        db.io { session ->
-            CredentialRepository().upsert(session, "py", "\$2b\$12\$6wamkYM992RYyml95emmjeW8uFNBxiNV5xrHemIjuZJdVyOM6j0Zm", 0.0)
-        }
-        assertTrue(PasswordService(db, CredentialRepository()).verify("py", "secret"))
+        assertEquals(HttpStatusCode.OK, r.status)
+        val s = client.get("$API/settings") { header("Authorization", "Bearer $t") }.obj()["settings"]!!.jsonArray
+        assertEquals("2", s.single().jsonObject["value"]!!.jsonPrimitive.content)
+        assertEquals(HttpStatusCode.NotFound, client.get("$API/settings/none") { header("Authorization", "Bearer $t") }.status)
     }
 }
 
-/** A database left by the Python server is adopted by Flyway, not migrated again. */
-class PythonDatabaseMigrationTest {
+/** V5 converts a database written by the v2 server. */
+class V5MigrationTest {
     @Test
-    fun baselinesAtVersionFour() {
+    fun convertsV2Data() {
         EmbeddedPostgres.start().use { pg ->
+            val flyway = Flyway.configure().dataSource(pg.postgresDatabase).locations("classpath:db/migration")
+            flyway.target("4").load().migrate()
             pg.postgresDatabase.connection.use { c ->
                 c.createStatement().use { st ->
-                    // What the Python server's own runner left behind after migrations 1–4.
-                    for (v in 1..4) {
-                        val name = listOf("V1__init.sql", "V2__drop_ob_and_add_deleted.sql", "V3__rename_columns.sql", "V4__records_mt_bigint.sql")[v - 1]
-                        st.execute(Database.resource("db/migration/$name"))
-                    }
-                    st.execute("CREATE TABLE schema_migrations (version integer PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())")
-                    st.execute("INSERT INTO schema_migrations VALUES (1), (2), (3), (4)")
-                    st.execute("INSERT INTO credentials (username, pw_hash) VALUES ('keep', 'x')")
+                    st.execute("INSERT INTO credentials (username, pw_hash) VALUES ('alex', 'hash')")
+                    st.execute(
+                        """
+                        INSERT INTO records ("user", "key", modified_time, start_time, stop_time, description, deleted, server_time) VALUES
+                          ('alex', 'done', 100, 1000, 2000, '#Work code #call', 0, 5.5),
+                          ('alex', 'run', 101, 3000, 3000, 'running', 0, 6.5),
+                          ('alex', 'gone', 102, 500, 600, 'x', 1, 4.5)
+                        """,
+                    )
+                    st.execute("""INSERT INTO settings ("user", "key", modified_time, value, server_time) VALUES ('alex', 'workdays', 1, '2', 1)""")
+                    st.execute("""INSERT INTO userinfo ("user", "key", modified_time, value, server_time) VALUES ('alex', 'apitoken_seed', 1, '"seed1"', 1)""")
                 }
             }
-            Database("postgresql://postgres:postgres@localhost:${pg.port}/postgres").use { db ->
-                db.migrate()
-                db.migrate()
-                assertEquals(listOf("keep"), runBlocking { PasswordService(db, CredentialRepository()).list() })
+            flyway.target("latest").load().migrate()
+            pg.postgresDatabase.connection.use { c ->
+                c.createStatement().use { st ->
+                    fun one(sql: String) = st.executeQuery(sql).let { it.next(); it.getString(1) }
+                    assertEquals("hash", one("SELECT password_hash FROM users WHERE username = 'alex'"))
+                    assertEquals("seed1", one("SELECT api_token_seed FROM users"))
+                    assertNull(one("SELECT stop_at FROM records WHERE description = 'running'"))
+                    assertEquals("1", one("SELECT count(*) FROM records WHERE deleted_at IS NOT NULL"))
+                    assertEquals("call,work", one("SELECT string_agg(tag, ',' ORDER BY tag) FROM record_tags"))
+                    // Revisions follow the old server-time order.
+                    assertEquals("x,#Work code #call,running", one("SELECT string_agg(description, ',' ORDER BY revision) FROM records"))
+                    assertEquals("1,2,3", one("SELECT string_agg(id::text, ',' ORDER BY id) FROM records"))
+                    assertEquals("2", one("SELECT value::text FROM settings"))
+                    assertEquals("0", one("SELECT count(*) FROM pg_tables WHERE tablename IN ('credentials', 'userinfo', 'schema_migrations')"))
+                }
             }
         }
     }

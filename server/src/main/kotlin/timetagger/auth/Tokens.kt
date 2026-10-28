@@ -4,31 +4,32 @@ import com.auth0.jwt.JWT
 import com.auth0.jwt.JWTVerifier
 import com.auth0.jwt.algorithms.Algorithm
 import com.auth0.jwt.interfaces.Payload
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonPrimitive
 import org.slf4j.LoggerFactory
 import timetagger.db.Database
-import timetagger.db.UserInfoRepository
-import timetagger.now
+import timetagger.db.UserRepository
 import java.security.SecureRandom
+import java.time.Duration
+import java.time.Instant
+import java.time.temporal.ChronoUnit
 import java.util.Base64
 
 private val log = LoggerFactory.getLogger("timetagger.auth")
 
-const val WEBTOKEN_DAYS = 14
-const val WEBTOKEN_LIFETIME = WEBTOKEN_DAYS * 24 * 60 * 60L
-const val API_TOKEN_EXP = 32503748400L // the year 3000
-
 /** The authenticated user, as carried in a token. */
-data class AuthInfo(val username: String, val expires: Long, val seed: String) {
-    /** API tokens live far longer than a web token can. */
-    val isApiToken: Boolean get() = expires > now() + WEBTOKEN_LIFETIME
+data class AuthInfo(val userId: Long, val username: String, val kind: TokenKind, val expiresAt: Instant)
+
+/** Web tokens come from a login and expire; API tokens are long-lived and made from a web token. */
+enum class TokenKind(val id: String, val seedColumn: String, val lifetime: Duration) {
+    WEB("web", "web_token_seed", Duration.ofDays(14)),
+    API("api", "api_token_seed", Duration.ofDays(365L * 100)),
+    ;
+
+    companion object {
+        fun of(id: String) = entries.firstOrNull { it.id == id }
+    }
 }
 
-enum class TokenKind(val id: String) { WEB("webtoken"), API("apitoken") }
-
-/** Signs and verifies the HS256 tokens; compatible with the Python server's. */
+/** Signs and verifies the HS256 tokens. */
 class JwtCodec(key: String) {
     private val algorithm = Algorithm.HMAC256(
         key.trim().ifEmpty {
@@ -37,58 +38,48 @@ class JwtCodec(key: String) {
         },
     )
 
-    /** Checks the signature only; [TokenService.validate] checks seed and expiry. */
+    /** Checks the signature and expiry; [TokenService.validate] checks the seed. */
     val verifier: JWTVerifier = JWT.require(algorithm).build()
 
-    fun encode(info: AuthInfo): String = JWT.create()
-        .withClaim("username", info.username)
-        .withClaim("expires", info.expires)
-        .withClaim("seed", info.seed)
+    fun encode(username: String, kind: TokenKind, seed: String, expiresAt: Instant): String = JWT.create()
+        .withSubject(username)
+        .withClaim("kind", kind.id)
+        .withClaim("seed", seed)
+        .withExpiresAt(expiresAt)
         .sign(algorithm)
-
-    fun decode(token: String): AuthInfo? = runCatching { verifier.verify(token) }.getOrNull()?.let(::info)
-
-    companion object {
-        fun info(payload: Payload): AuthInfo? = AuthInfo(
-            username = payload.getClaim("username").asString() ?: return null,
-            expires = payload.getClaim("expires").asDouble()?.toLong() ?: return null,
-            seed = payload.getClaim("seed").asString() ?: return null,
-        )
-    }
 }
 
 /**
- * Issues and validates tokens. Each kind has a per-user seed in userinfo;
- * a new seed revokes every token of that kind.
+ * Issues and validates tokens. Each user has one seed per kind; a new seed
+ * revokes every token of that kind.
  */
-class TokenService(private val codec: JwtCodec, private val db: Database, private val userInfo: UserInfoRepository) {
-    /** A token of the given kind; the caller must already have authenticated the user. */
-    suspend fun issue(username: String, kind: TokenKind, reset: Boolean = false): String {
-        val expires = if (kind == TokenKind.API) API_TOKEN_EXP else (now() + WEBTOKEN_LIFETIME).toLong()
-        return codec.encode(AuthInfo(username, expires, seed(username, kind, reset)))
+class TokenService(private val codec: JwtCodec, private val db: Database, private val users: UserRepository) {
+    /** A token for a user who has already authenticated. */
+    suspend fun issue(username: String, kind: TokenKind): Pair<String, Instant> = db.tx { session ->
+        val user = users.byName(session, username) ?: error("no user $username")
+        val seed = (if (kind == TokenKind.WEB) user.webTokenSeed else user.apiTokenSeed)
+            ?: randomToken(8).also { users.setSeed(session, user.id, kind.seedColumn, it) }
+        val expiresAt = Instant.now().plus(kind.lifetime).truncatedTo(ChronoUnit.SECONDS)
+        codec.encode(username, kind, seed, expiresAt) to expiresAt
     }
 
-    /**
-     * The token's user if its seed is current (not revoked) and it has not expired;
-     * the signature was already checked by the jwt provider.
-     */
+    /** Revokes every token of that kind for the user. */
+    suspend fun revoke(userId: Long, kind: TokenKind) =
+        db.tx { users.setSeed(it, userId, kind.seedColumn, randomToken(8)) }
+
+    /** The token's user if its seed is still current. Signature and expiry were checked by the jwt provider. */
     suspend fun validate(payload: Payload): AuthInfo? {
-        val info = JwtCodec.info(payload) ?: return null
-        val kind = if (info.isApiToken) TokenKind.API else TokenKind.WEB
-        return info.takeIf { seed(it.username, kind, false) == it.seed && it.expires >= now() }
-    }
-
-    private suspend fun seed(username: String, kind: TokenKind, reset: Boolean): String = db.tx { session ->
-        val key = "${kind.id}_seed"
-        val current = userInfo.get(session, username, key)?.jsonPrimitive?.contentOrNull.orEmpty()
-        if (!reset && current.isNotEmpty()) current
-        else randomToken(8).also { userInfo.put(session, username, key, JsonPrimitive(it), now()) }
+        val username = payload.subject ?: return null
+        val kind = TokenKind.of(payload.getClaim("kind").asString() ?: return null) ?: return null
+        val seed = payload.getClaim("seed").asString() ?: return null
+        val user = db.io { users.byName(it, username) } ?: return null
+        val current = if (kind == TokenKind.WEB) user.webTokenSeed else user.apiTokenSeed
+        return AuthInfo(user.id, user.username, kind, payload.expiresAtAsInstant).takeIf { seed == current }
     }
 
     companion object {
         private val random = SecureRandom()
 
-        /** Like Python's secrets.token_urlsafe(n). */
         fun randomToken(bytes: Int): String =
             Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(bytes).also(random::nextBytes))
     }
