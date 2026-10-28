@@ -269,9 +269,22 @@ final class Store: ObservableObject {
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "idle", content: content, trigger: nil))
     }
 
+    /// The outcome of the last update check, for Settings → About.
+    @Published var updateStatus = ""
+
     func checkForUpdate() async {
-        guard let latest = try? await API.latestRelease() else { return }
-        update = latest.version.compare(Self.appVersion, options: .numeric) == .orderedDescending ? latest : nil
+        updateStatus = "Checking…"
+        do {
+            guard let latest = try await API.latestRelease() else {
+                update = nil
+                updateStatus = "No releases found"
+                return
+            }
+            update = latest.version.compare(Self.appVersion, options: .numeric) == .orderedDescending ? latest : nil
+            updateStatus = update == nil ? "Up to date" : ""
+        } catch {
+            updateStatus = "Couldn't check: \(error.localizedDescription)"
+        }
     }
 
     /// The link for a ticket tag such as "sm-1061", if a ticket URL is set and the tag looks like a key.
