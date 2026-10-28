@@ -155,6 +155,14 @@ struct API {
 
     private static let iso = ISO8601DateFormatter()
 
+    /// What the server lists this Mac as under Settings → Signed-in devices.
+    static let userAgent: String = {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+        let os = ProcessInfo.processInfo.operatingSystemVersion
+        let host = Host.current().localizedName ?? "Mac"
+        return "TimeTaggerBar/\(version) · \(host) · macOS \(os.majorVersion).\(os.minorVersion)"
+    }()
+
     private func url(_ path: String, _ query: [URLQueryItem] = []) throws -> URL {
         guard var comps = URLComponents(string: baseURL) else { throw APIError.notConfigured }
         comps.path = comps.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
@@ -166,6 +174,7 @@ struct API {
 
     private func send(_ req: URLRequest, auth: Bool = true, retried: Bool = false) async throws -> Data {
         var req = req
+        req.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
         if auth {
             req.setValue("Bearer \(try await session.accessToken(self))", forHTTPHeaderField: "Authorization")
         }
