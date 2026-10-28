@@ -12,9 +12,13 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.put
 import io.ktor.server.routing.route
-import io.ktor.server.sse.heartbeat
 import io.ktor.server.sse.sse
 import io.ktor.sse.ServerSentEvent
+import io.ktor.utils.io.ClosedWriteChannelException
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
 import timetagger.Invalid
 import timetagger.db.RecordFilter
 import timetagger.model.RecordBatch
@@ -76,11 +80,15 @@ fun Route.settingRoutes(settings: SettingService) = route("settings") {
  */
 fun Route.syncRoutes(sync: SyncService) {
     sse("changes/stream") {
-        heartbeat { period = 30.seconds }
         val user = call.auth.username
         log.info("Change stream opened for {}", user)
+        // The heartbeat goes through the same loop as the events (Ktor's own heartbeat runs in a
+        // separate job, which logs a client going away as an error), so a closed connection ends here.
+        val heartbeat = flow { while (true) { delay(30.seconds); emit(ServerSentEvent(comments = "heartbeat")) } }
         try {
-            sync.written(call.auth.userId).collect { send(ServerSentEvent(event = "change", data = "")) }
+            merge(sync.written(call.auth.userId).map { ServerSentEvent(event = "change", data = "") }, heartbeat).collect { send(it) }
+        } catch (_: ClosedWriteChannelException) {
+            // The client went away.
         } finally {
             log.info("Change stream closed for {}", user)
         }
