@@ -29,7 +29,7 @@ enum DurationFormat: String, CaseIterable, Identifiable {
 }
 
 struct ReportOptions: Equatable {
-    var period: Period = .week
+    var period: Period = .today
     var tags = ""
     var grouping: Grouping = .tags
     var groupPeriod: GroupPeriod = .none

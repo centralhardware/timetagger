@@ -6,8 +6,12 @@ enum Period: String, CaseIterable, Identifiable {
     case today = "Today", yesterday = "Yesterday", week = "This week", month = "This month"
     var id: String { rawValue }
 
-    var range: (Int, Int) {
-        let cal = Calendar.current
+    var range: (Int, Int) { range(in: .current) }
+
+    /// The period's bounds as days in the given time zone ("today" in London starts at London midnight).
+    func range(in timeZone: TimeZone) -> (Int, Int) {
+        var cal = Calendar.current
+        cal.timeZone = timeZone
         let now = Date()
         let start: Date
         var end: Date
