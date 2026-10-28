@@ -1,6 +1,7 @@
 package timetagger.routes
 
 import io.ktor.server.auth.principal
+import io.ktor.server.application.ApplicationCall
 import io.ktor.server.routing.RoutingCall
 import timetagger.Invalid
 import timetagger.auth.AuthInfo
@@ -8,7 +9,7 @@ import java.time.Instant
 import java.time.format.DateTimeParseException
 
 /** The authenticated user; only valid inside an authenticated route. */
-val RoutingCall.auth: AuthInfo get() = principal<AuthInfo>()!!
+val ApplicationCall.auth: AuthInfo get() = principal<AuthInfo>()!!
 
 fun RoutingCall.path(name: String): String = parameters[name]!!
 

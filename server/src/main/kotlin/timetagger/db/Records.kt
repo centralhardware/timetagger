@@ -19,7 +19,7 @@ data class RecordFilter(
 
 class RecordRepository {
     private val select = """
-        SELECT r.id, r.start_at, r.stop_at, r.description, r.deleted_at, r.modified_at, r.revision,
+        SELECT r.id, r.start_at, r.stop_at, r.description, r.deleted_at, r.revision,
                array(SELECT t.tag FROM record_tags t WHERE t.record_id = r.id ORDER BY t.tag) AS tags
         FROM records r
     """.trimIndent()
@@ -31,7 +31,6 @@ class RecordRepository {
         description = row.string("description"),
         tags = row.array<String>("tags").toList(),
         deletedAt = row.instantOrNull("deleted_at"),
-        modifiedAt = row.instant("modified_at"),
         revision = row.long("revision"),
     )
 
@@ -57,18 +56,18 @@ class RecordRepository {
     /** Creates the record (the database picks the id) with a new revision and its tags. */
     fun create(
         session: Session, userId: Long, start: Instant, stop: Instant?,
-        description: String, deletedAt: Instant?, modifiedAt: Instant,
+        description: String, deletedAt: Instant?,
     ): Record {
         val id = session.single(
             queryOf(
                 """
-                INSERT INTO records (user_id, start_at, stop_at, description, deleted_at, modified_at)
-                VALUES (:user, :start, :stop, :description, :deleted, :modified)
+                INSERT INTO records (user_id, start_at, stop_at, description, deleted_at)
+                VALUES (:user, :start, :stop, :description, :deleted)
                 RETURNING id
                 """,
                 mapOf(
                     "user" to userId, "start" to start, "stop" to stop,
-                    "description" to description, "deleted" to deletedAt, "modified" to modifiedAt,
+                    "description" to description, "deleted" to deletedAt,
                 ),
             ),
         ) { it.long("id") }!!
@@ -78,18 +77,18 @@ class RecordRepository {
     /** Replaces the record's fields, stamps a new revision and rewrites its tags. */
     fun update(
         session: Session, userId: Long, id: Long, start: Instant, stop: Instant?,
-        description: String, deletedAt: Instant?, modifiedAt: Instant,
+        description: String, deletedAt: Instant?,
     ): Record {
         session.update(
             queryOf(
                 """
                 UPDATE records SET start_at = :start, stop_at = :stop, description = :description,
-                    deleted_at = :deleted, modified_at = :modified, updated_at = now(), revision = nextval('revision_seq')
+                    deleted_at = :deleted, updated_at = now(), revision = nextval('revision_seq')
                 WHERE user_id = :user AND id = :id
                 """,
                 mapOf(
                     "user" to userId, "id" to id, "start" to start, "stop" to stop,
-                    "description" to description, "deleted" to deletedAt, "modified" to modifiedAt,
+                    "description" to description, "deleted" to deletedAt,
                 ),
             ),
         )

@@ -5,7 +5,8 @@ import Foundation
 struct Record: Codable, Identifiable, Hashable {
     /// The server's numeric id as text; empty for a record the server hasn't created yet.
     var key: String
-    var mt: Int
+    /// The revision this copy was read at; 0 for a new record. A save is refused if the server has moved on.
+    var rev: Int64
     var t1: Int
     var t2: Int
     var ds: String
@@ -52,7 +53,7 @@ private struct WireRecord: Codable {
     var description: String
     var deleted: Bool?
     var deletedAt: Date?
-    var modifiedAt: Date?
+    var revision: Int64?
 
     init(_ r: Record) {
         id = Int64(r.key)
@@ -60,13 +61,13 @@ private struct WireRecord: Codable {
         stop = r.isRunning ? nil : Date(timeIntervalSince1970: TimeInterval(r.t2))
         description = r.ds
         deleted = r.isDeleted
-        modifiedAt = Date(timeIntervalSince1970: TimeInterval(r.mt))
+        revision = r.rev == 0 ? nil : r.rev
     }
 
     var record: Record {
         let t1 = Int(start.timeIntervalSince1970)
         return Record(
-            key: id.map(String.init) ?? "", mt: Int((modifiedAt ?? start).timeIntervalSince1970), t1: t1,
+            key: id.map(String.init) ?? "", rev: revision ?? 0, t1: t1,
             t2: stop.map { Int($0.timeIntervalSince1970) } ?? t1, ds: description,
             deleted: deletedAt == nil ? 0 : 1, st: nil
         )
@@ -163,6 +164,22 @@ struct API {
         var tokenReq = URLRequest(url: try web.url("tokens"))
         tokenReq.httpMethod = "POST"
         return try decoder.decode(Token.self, from: try await web.send(tokenReq)).token
+    }
+
+    /// Follows the server's change stream, calling onChange after every write by any client.
+    /// Returns when the stream ends; throws when it can't be opened.
+    func watch(onChange: @escaping () async -> Void) async throws {
+        guard !token.isEmpty else { throw APIError.notConfigured }
+        var req = URLRequest(url: try url("changes/stream"))
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        // The server sends a heartbeat every 30 s, so a silent minute means the connection is gone.
+        req.timeoutInterval = 90
+        let (bytes, resp) = try await URLSession.shared.bytes(for: req)
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200..<300).contains(code) else { throw APIError.http(code, "change stream unavailable") }
+        for try await line in bytes.lines where line == "event: change" {
+            await onChange()
+        }
     }
 
     func version() async throws -> String {

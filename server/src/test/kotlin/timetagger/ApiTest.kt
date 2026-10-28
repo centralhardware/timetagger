@@ -13,9 +13,14 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
+import io.ktor.server.cio.CIO
+import io.ktor.server.engine.embeddedServer
 import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
 import io.zonky.test.db.postgres.embedded.EmbeddedPostgres
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -27,13 +32,27 @@ import org.flywaydb.core.Flyway
 import timetagger.auth.PasswordService
 import timetagger.config.Config
 import timetagger.db.Database
+import timetagger.db.RecordRepository
+import timetagger.db.SettingRepository
 import timetagger.db.UserRepository
+import timetagger.model.RecordInput
+import timetagger.service.RecordService
+import timetagger.service.SyncService
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
+import org.slf4j.LoggerFactory
+import java.time.Instant
+import java.net.URI
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse.BodyHandlers
 import java.util.Base64
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 private const val API = "/timetagger/api/v1"
 
@@ -101,7 +120,7 @@ class ApiTest {
         suspend fun list(q: String) = client.get("$API/records?$q") { header("Authorization", "Bearer $t") }
             .obj()["records"]!!.jsonArray.map { it.jsonObject["id"]!!.jsonPrimitive.long }
 
-        val a = create("""{"start":"2026-10-28T08:00:00Z","stop":"2026-10-28T09:00:00Z","description":"code #Work","modifiedAt":"2026-10-28T09:00:00Z"}""")
+        val a = create("""{"start":"2026-10-28T08:00:00Z","stop":"2026-10-28T09:00:00Z","description":"code #Work"}""")
         assertEquals(listOf("work"), client.get("$API/records/$a") { header("Authorization", "Bearer $t") }.obj()["tags"]!!.jsonArray.map { it.jsonPrimitive.content })
         val b = create("""{"start":"2026-10-28T10:00:00Z","description":"run #work #x"}""")
         assertEquals(b, a + 1)
@@ -118,10 +137,12 @@ class ApiTest {
         assertEquals(listOf(b), list("from=2026-11-01T00:00:00Z&to=2026-11-02T00:00:00Z"))
         assertEquals(HttpStatusCode.UnprocessableEntity, client.get("$API/records?from=yesterday&to=now") { header("Authorization", "Bearer $t") }.status)
 
-        // An older edit is refused with the current record.
-        val stale = send("PUT", "records/$a", """{"start":"2026-10-28T08:00:00Z","description":"old","modifiedAt":"2026-10-27T00:00:00Z"}""")
+        // An edit based on an old revision is refused with the current record; the current revision goes through.
+        val aRev = client.get("$API/records/$a") { header("Authorization", "Bearer $t") }.obj()["revision"]!!.jsonPrimitive.long
+        val stale = send("PUT", "records/$a", """{"start":"2026-10-28T08:00:00Z","description":"old","revision":${aRev - 1}}""")
         assertEquals(HttpStatusCode.Conflict, stale.status)
         assertEquals("code #Work", stale.obj()["current"]!!.jsonObject["description"]!!.jsonPrimitive.content)
+        assertEquals(HttpStatusCode.OK, send("PUT", "records/$a", """{"start":"2026-10-28T08:00:00Z","stop":"2026-10-28T09:00:00Z","description":"code #Work","revision":$aRev}""").status)
 
         // Stop b and start a new one in one go; one bad entry rejects the whole batch.
         val batch = send("POST", "records/batch", """{"records":[{"id":$b,"start":"2026-10-28T10:00:00Z","stop":"2026-10-28T11:00:00Z","description":"run #work"},
@@ -146,6 +167,87 @@ class ApiTest {
         assertEquals(listOf(c), after["records"]!!.jsonArray.map { it.jsonObject["id"]!!.jsonPrimitive.long })
     }
 
+    /** Over a real server: the test engine holds a streamed response back until it ends. */
+    @Test
+    fun changeStream() {
+        val server = embeddedServer(CIO, port = 0) { module(Config(jwtKey = "test-key"), db) }.start()
+        try {
+            val base = runBlocking { "http://localhost:${server.engine.resolvedConnectors().first().port}$API" }
+            val http = java.net.http.HttpClient.newHttpClient()
+            fun call(method: String, path: String, auth: String, body: String = "") = http.send(
+                HttpRequest.newBuilder(URI("$base/$path")).header("Authorization", auth).header("Content-Type", "application/json")
+                    .method(method, HttpRequest.BodyPublishers.ofString(body)).build(),
+                BodyHandlers.ofString(),
+            ).body()
+            val basic = "Basic " + Base64.getEncoder().encodeToString("alice:secret".toByteArray())
+            val t = Json.parseToJsonElement(call("POST", "sessions", basic)).jsonObject["token"]!!.jsonPrimitive.content
+            val lines = http.send(
+                HttpRequest.newBuilder(URI("$base/changes/stream")).header("Authorization", "Bearer $t").build(),
+                BodyHandlers.ofLines(),
+            ).body().iterator()
+            call("POST", "records", "Bearer $t", """{"start":"2026-10-28T08:00:00Z"}""")
+            assertEquals("event: change", lines.asSequence().first { it.startsWith("event:") })
+        } finally {
+            server.stop(0, 0)
+        }
+    }
+
+    /** A write that commits late still lands above every revision a client could already have synced. */
+    @Test
+    fun writesCommitInRevisionOrder() = runBlocking {
+        val repo = RecordRepository()
+        val records = RecordService(db, repo)
+        val alice = db.io { UserRepository().byName(it, "alice") }!!.id
+        val start = Instant.parse("2026-10-28T08:00:00Z")
+        coroutineScope {
+            // Slow takes the lock first and holds it a while before writing.
+            val slow = async { db.write(alice) { s -> Thread.sleep(500); repo.create(s, alice, start, null, "slow", null) } }
+            delay(100)
+            val fast = async { records.create(alice, RecordInput(start = start, description = "fast")) }
+            val (a, b) = slow.await() to fast.await()
+            assertTrue(b.revision > a.revision, "fast (${b.revision}) must come after slow (${a.revision})")
+        }
+    }
+
+    @Test
+    fun syncSnapshotCoversWhatItReturns() = runBlocking {
+        val sync = SyncService(db, RecordRepository(), SettingRepository())
+        val records = RecordService(db, RecordRepository())
+        val alice = db.io { UserRepository().byName(it, "alice") }!!.id
+        val start = Instant.parse("2026-10-28T08:00:00Z")
+        val seen = mutableSetOf<Long>()
+        var since = 0L
+        val written = coroutineScope {
+            val writers = (1..20).map { i -> async { records.create(alice, RecordInput(start = start, description = "w$i")).id } }
+            // Sync alongside the writers, the way a client would.
+            while (writers.any { it.isActive }) {
+                val c = sync.changes(alice, since)
+                c.records.forEach { seen += it.id }
+                since = c.revision
+            }
+            writers.map { it.await() }
+        }
+        sync.changes(alice, since).records.forEach { seen += it.id }
+        assertEquals(written.toSet(), seen)
+    }
+
+    @Test
+    fun requestsAreLogged() = api {
+        val appender = ListAppender<ILoggingEvent>().apply { start() }
+        val logger = LoggerFactory.getLogger("timetagger.http") as Logger
+        logger.addAppender(appender)
+        try {
+            val t = token()
+            client.get("$API/records?from=2026-10-28T00:00:00Z&to=2026-10-29T00:00:00Z") { header("Authorization", "Bearer $t") }
+            client.get("/timetagger/status")
+            val lines = appender.list.map { it.formattedMessage }
+            assertTrue(lines.any { it.startsWith("GET /timetagger/api/v1/records 200 alice ") && it.endsWith("ms") }, lines.toString())
+            assertTrue(lines.none { "/status" in it }, lines.toString())
+        } finally {
+            logger.detachAppender(appender)
+        }
+    }
+
     @Test
     fun settings() = api {
         val t = token()
@@ -155,6 +257,12 @@ class ApiTest {
         assertEquals(HttpStatusCode.OK, r.status)
         val s = client.get("$API/settings") { header("Authorization", "Bearer $t") }.obj()["settings"]!!.jsonArray
         assertEquals("2", s.single().jsonObject["value"]!!.jsonPrimitive.content)
+        // A write based on a stale revision leaves the stored value.
+        val rev = s.single().jsonObject["revision"]!!.jsonPrimitive.long
+        val stale = client.put("$API/settings/workdays") {
+            header("Authorization", "Bearer $t"); contentType(ContentType.Application.Json); setBody("""{"value":5,"revision":${rev - 1}}""")
+        }
+        assertEquals("2", stale.obj()["value"]!!.jsonPrimitive.content)
         assertEquals(HttpStatusCode.NotFound, client.get("$API/settings/none") { header("Authorization", "Bearer $t") }.status)
     }
 }

@@ -12,6 +12,9 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.put
 import io.ktor.server.routing.route
+import io.ktor.server.sse.heartbeat
+import io.ktor.server.sse.sse
+import io.ktor.sse.ServerSentEvent
 import timetagger.Invalid
 import timetagger.db.RecordFilter
 import timetagger.model.RecordBatch
@@ -22,6 +25,10 @@ import timetagger.model.SettingList
 import timetagger.service.RecordService
 import timetagger.service.SettingService
 import timetagger.service.SyncService
+import kotlin.time.Duration.Companion.seconds
+import org.slf4j.LoggerFactory
+
+private val log = LoggerFactory.getLogger("timetagger.sync")
 
 /**
  * GET /records?from&to[&tag=a&tag=b][&running][&deleted]; POST /records creates one;
@@ -63,8 +70,21 @@ fun Route.settingRoutes(settings: SettingService) = route("settings") {
     }
 }
 
-/** GET /changes?since=<revision>: everything written after that revision (0 for everything). */
+/**
+ * GET /changes?since=<revision>: everything written after that revision (0 for everything).
+ * GET /changes/stream: server-sent events, a `change` event after each write, for a client to fetch /changes.
+ */
 fun Route.syncRoutes(sync: SyncService) {
+    sse("changes/stream") {
+        heartbeat { period = 30.seconds }
+        val user = call.auth.username
+        log.info("Change stream opened for {}", user)
+        try {
+            sync.written(call.auth.userId).collect { send(ServerSentEvent(event = "change", data = "")) }
+        } finally {
+            log.info("Change stream closed for {}", user)
+        }
+    }
     get("changes") {
         val since = call.request.queryParameters["since"]?.let { it.toLongOrNull() ?: throw Invalid("since must be a revision number") } ?: 0
         call.respond(sync.changes(call.auth.userId, since))

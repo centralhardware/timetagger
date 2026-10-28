@@ -5,6 +5,12 @@ import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.install
+import io.ktor.server.sse.SSE
+import io.ktor.server.plugins.calllogging.CallLogging
+import io.ktor.server.plugins.calllogging.processingTimeMillis
+import io.ktor.server.auth.principal
+import timetagger.auth.AuthInfo
+import org.slf4j.event.Level
 import io.ktor.server.auth.Authentication
 import io.ktor.server.auth.UserIdPrincipal
 import io.ktor.server.auth.authenticate
@@ -68,6 +74,17 @@ fun Application.module(config: Config, db: Database) {
     val services = Services(db, config.jwtKey)
 
     install(ContentNegotiation) { json(ApiJson) }
+    install(SSE)
+    // One line per request: method, path, status, user and time taken; the health check stays quiet.
+    install(CallLogging) {
+        level = Level.INFO
+        logger = LoggerFactory.getLogger("timetagger.http")
+        filter { !it.request.path().endsWith("/status") }
+        format { call ->
+            val user = call.principal<AuthInfo>()?.username ?: call.principal<UserIdPrincipal>()?.name ?: "-"
+            "${call.request.httpMethod.value} ${call.request.path()} ${call.response.status()?.value ?: "-"} $user ${call.processingTimeMillis()}ms"
+        }
+    }
     install(Authentication) {
         basic(LOGIN) {
             realm = "TimeTagger"
@@ -80,7 +97,10 @@ fun Application.module(config: Config, db: Database) {
         }
     }
     install(StatusPages) {
-        exception<Conflict> { call, e -> call.respond(e.status, ErrorResponse(e.code, e.message.orEmpty(), e.current)) }
+        exception<Conflict> { call, e ->
+            log.info("Conflict on record {}: the client's revision is stale, stored is {}", e.current.id, e.current.revision)
+            call.respond(e.status, ErrorResponse(e.code, e.message.orEmpty(), e.current))
+        }
         exception<ApiException> { call, e -> call.error(e.status, e.code, e.message.orEmpty()) }
         // A body that is not the expected JSON.
         exception<BadRequestException> { call, e ->
