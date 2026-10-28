@@ -49,6 +49,7 @@ final class Store: ObservableObject {
     @Published var lately: [Record] = []
     /// For autocomplete, most recently used first.
     @Published var tags: [String] = []
+    @Published var serverVersion = "…"
     @Published var now = Int(Date().timeIntervalSince1970)
 
     private var tick: Timer?
@@ -185,6 +186,7 @@ final class Store: ObservableObject {
             running = lately.filter(\.isRunning)
             // Autocomplete is a nicety: a server without the endpoint just offers none.
             tags = (try? await api.tags()) ?? tags
+            serverVersion = (try? await api.version()) ?? "unreachable"
             error = nil
         } catch {
             self.error = error.localizedDescription

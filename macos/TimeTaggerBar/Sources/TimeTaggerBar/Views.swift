@@ -38,7 +38,8 @@ struct MenuView: View {
                     NSApp.activate(ignoringOtherApps: true)
                 }
                 Menu {
-                    Text("TimeTaggerBar \(Store.appVersion)")
+                    Text("App \(Store.appVersion)")
+                    Text("Server \(store.serverVersion)")
                     Divider()
                     Button("Settings…") {
                         openWindow(id: "settings")
@@ -300,7 +301,6 @@ struct SettingsView: View {
     @EnvironmentObject var store: Store
     @State private var openAtLogin = SMAppService.mainApp.status == .enabled
     @State private var loginError = ""
-    @State private var serverVersion = "…"
     @State private var url = ""
     @State private var username = ""
     @State private var password = ""
@@ -347,7 +347,7 @@ struct SettingsView: View {
             }
             Section("About") {
                 LabeledContent("TimeTaggerBar", value: Store.appVersion)
-                LabeledContent("Server", value: serverVersion)
+                LabeledContent("Server", value: store.serverVersion)
             }
         }
         .formStyle(.grouped)
@@ -356,7 +356,7 @@ struct SettingsView: View {
         .frame(width: 440)
         .fixedSize(horizontal: false, vertical: true)
         .onAppear { url = store.serverURL; username = store.username }
-        .task(id: store.serverURL) { serverVersion = (try? await store.api.version()) ?? "unreachable" }
+        .task(id: store.serverURL) { store.serverVersion = (try? await store.api.version()) ?? "unreachable" }
     }
 
     private func setOpenAtLogin(_ on: Bool) {
