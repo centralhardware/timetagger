@@ -26,6 +26,9 @@ import timetagger.service.RecordService
 import timetagger.service.SettingService
 import timetagger.service.SyncService
 import kotlin.time.Duration.Companion.seconds
+import org.slf4j.LoggerFactory
+
+private val log = LoggerFactory.getLogger("timetagger.sync")
 
 /**
  * GET /records?from&to[&tag=a&tag=b][&running][&deleted]; POST /records creates one;
@@ -74,7 +77,13 @@ fun Route.settingRoutes(settings: SettingService) = route("settings") {
 fun Route.syncRoutes(sync: SyncService) {
     sse("changes/stream") {
         heartbeat { period = 30.seconds }
-        sync.written(call.auth.userId).collect { send(ServerSentEvent(event = "change", data = "")) }
+        val user = call.auth.username
+        log.info("Change stream opened for {}", user)
+        try {
+            sync.written(call.auth.userId).collect { send(ServerSentEvent(event = "change", data = "")) }
+        } finally {
+            log.info("Change stream closed for {}", user)
+        }
     }
     get("changes") {
         val since = call.request.queryParameters["since"]?.let { it.toLongOrNull() ?: throw Invalid("since must be a revision number") } ?: 0

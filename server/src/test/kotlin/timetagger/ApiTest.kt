@@ -18,6 +18,9 @@ import io.ktor.server.engine.embeddedServer
 import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
 import io.zonky.test.db.postgres.embedded.EmbeddedPostgres
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -29,7 +32,17 @@ import org.flywaydb.core.Flyway
 import timetagger.auth.PasswordService
 import timetagger.config.Config
 import timetagger.db.Database
+import timetagger.db.RecordRepository
+import timetagger.db.SettingRepository
 import timetagger.db.UserRepository
+import timetagger.model.RecordInput
+import timetagger.service.RecordService
+import timetagger.service.SyncService
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
+import org.slf4j.LoggerFactory
+import java.time.Instant
 import java.net.URI
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse.BodyHandlers
@@ -39,6 +52,7 @@ import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 private const val API = "/timetagger/api/v1"
 
@@ -175,6 +189,62 @@ class ApiTest {
             assertEquals("event: change", lines.asSequence().first { it.startsWith("event:") })
         } finally {
             server.stop(0, 0)
+        }
+    }
+
+    /** A write that commits late still lands above every revision a client could already have synced. */
+    @Test
+    fun writesCommitInRevisionOrder() = runBlocking {
+        val repo = RecordRepository()
+        val records = RecordService(db, repo)
+        val alice = db.io { UserRepository().byName(it, "alice") }!!.id
+        val start = Instant.parse("2026-10-28T08:00:00Z")
+        coroutineScope {
+            // Slow takes the lock first and holds it a while before writing.
+            val slow = async { db.write(alice) { s -> Thread.sleep(500); repo.create(s, alice, start, null, "slow", null) } }
+            delay(100)
+            val fast = async { records.create(alice, RecordInput(start = start, description = "fast")) }
+            val (a, b) = slow.await() to fast.await()
+            assertTrue(b.revision > a.revision, "fast (${b.revision}) must come after slow (${a.revision})")
+        }
+    }
+
+    @Test
+    fun syncSnapshotCoversWhatItReturns() = runBlocking {
+        val sync = SyncService(db, RecordRepository(), SettingRepository())
+        val records = RecordService(db, RecordRepository())
+        val alice = db.io { UserRepository().byName(it, "alice") }!!.id
+        val start = Instant.parse("2026-10-28T08:00:00Z")
+        val seen = mutableSetOf<Long>()
+        var since = 0L
+        val written = coroutineScope {
+            val writers = (1..20).map { i -> async { records.create(alice, RecordInput(start = start, description = "w$i")).id } }
+            // Sync alongside the writers, the way a client would.
+            while (writers.any { it.isActive }) {
+                val c = sync.changes(alice, since)
+                c.records.forEach { seen += it.id }
+                since = c.revision
+            }
+            writers.map { it.await() }
+        }
+        sync.changes(alice, since).records.forEach { seen += it.id }
+        assertEquals(written.toSet(), seen)
+    }
+
+    @Test
+    fun requestsAreLogged() = api {
+        val appender = ListAppender<ILoggingEvent>().apply { start() }
+        val logger = LoggerFactory.getLogger("timetagger.http") as Logger
+        logger.addAppender(appender)
+        try {
+            val t = token()
+            client.get("$API/records?from=2026-10-28T00:00:00Z&to=2026-10-29T00:00:00Z") { header("Authorization", "Bearer $t") }
+            client.get("/timetagger/status")
+            val lines = appender.list.map { it.formattedMessage }
+            assertTrue(lines.any { it.startsWith("GET /timetagger/api/v1/records 200 alice ") && it.endsWith("ms") }, lines.toString())
+            assertTrue(lines.none { "/status" in it }, lines.toString())
+        } finally {
+            logger.detachAppender(appender)
         }
     }
 
