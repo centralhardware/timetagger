@@ -80,26 +80,88 @@ class ApiTest {
     }
 
     private suspend fun ApplicationTestBuilder.login(user: String = "alice", pw: String = "secret") =
-        client.post("$API/sessions") { header("Authorization", "Basic " + Base64.getEncoder().encodeToString("$user:$pw".toByteArray())) }
+        client.post("$API/auth/login") { contentType(ContentType.Application.Json); setBody("""{"username":"$user","password":"$pw"}""") }
 
-    private suspend fun ApplicationTestBuilder.token() = login().obj()["token"]!!.jsonPrimitive.content
+    private suspend fun ApplicationTestBuilder.refresh(token: String) =
+        client.post("$API/auth/refresh") { contentType(ContentType.Application.Json); setBody("""{"refreshToken":"$token"}""") }
+
+    private suspend fun ApplicationTestBuilder.token() = login().obj()["accessToken"]!!.jsonPrimitive.content
+
+    private suspend fun ApplicationTestBuilder.me(bearer: String) = client.get("$API/me") { header("Authorization", "Bearer $bearer") }
 
     private suspend fun HttpResponse.obj(): JsonObject = Json.parseToJsonElement(bodyAsText()).jsonObject
 
     @Test
-    fun sessionsAndTokens() = api {
+    fun loginRefreshAndLogout() = api {
         assertEquals(HttpStatusCode.Unauthorized, login(pw = "wrong").status)
+        val first = login().obj()
+        val access = first["accessToken"]!!.jsonPrimitive.content
+        val refreshToken = first["refreshToken"]!!.jsonPrimitive.content
+        assertEquals("alice", me(access).obj()["username"]!!.jsonPrimitive.content)
+
+        // A refresh rotates: the new pair works, the old refresh token is spent.
+        val second = refresh(refreshToken).obj()
+        val refreshed = second["refreshToken"]!!.jsonPrimitive.content
+        assertEquals(HttpStatusCode.OK, me(second["accessToken"]!!.jsonPrimitive.content).status)
+        // Presenting the spent one again looks like theft: the whole session ends.
+        assertEquals(HttpStatusCode.Unauthorized, refresh(refreshToken).status)
+        assertEquals(HttpStatusCode.Unauthorized, refresh(refreshed).status)
+
+        // Logout ends a session for good.
+        val other = login().obj()["refreshToken"]!!.jsonPrimitive.content
+        client.post("$API/auth/logout") { contentType(ContentType.Application.Json); setBody("""{"refreshToken":"$other"}""") }
+        assertEquals(HttpStatusCode.Unauthorized, refresh(other).status)
+
+        val bad = me("not-a-token")
+        assertEquals(HttpStatusCode.Unauthorized, bad.status)
+        assertEquals("unauthorized", bad.obj()["error"]!!.jsonPrimitive.content)
+        assertEquals(HttpStatusCode.Unauthorized, client.get("$API/me").status)
+    }
+
+    @Test
+    fun sessionsAndApiKeys() = api {
+        val access = token()
+        val sessions = client.get("$API/auth/sessions") { header("Authorization", "Bearer $access") }.obj()["sessions"]!!.jsonArray
+        assertEquals(1, sessions.size)
+
+        val created = client.post("$API/api-keys") {
+            header("Authorization", "Bearer $access"); contentType(ContentType.Application.Json); setBody("""{"name":"merge cron"}""")
+        }.obj()
+        val key = created["key"]!!.jsonPrimitive.content
+        assertTrue(key.startsWith("tt_"))
+        assertEquals("alice", me(key).obj()["username"]!!.jsonPrimitive.content)
+        // The key is shown once: the list has its name and prefix only.
+        val listed = client.get("$API/api-keys") { header("Authorization", "Bearer $access") }.obj()["apiKeys"]!!.jsonArray.single().jsonObject
+        assertEquals("merge cron", listed["name"]!!.jsonPrimitive.content)
+        assertNull(listed["key"]?.takeIf { it !is kotlinx.serialization.json.JsonNull })
+        assertTrue(key.startsWith(listed["prefix"]!!.jsonPrimitive.content))
+        // A key can't manage keys or sessions.
+        assertEquals(HttpStatusCode.Forbidden, client.post("$API/api-keys") { header("Authorization", "Bearer $key"); contentType(ContentType.Application.Json); setBody("{}") }.status)
+        assertEquals(HttpStatusCode.Forbidden, client.get("$API/auth/sessions") { header("Authorization", "Bearer $key") }.status)
+        // Revoking one key ends it alone.
+        val id = created["id"]!!.jsonPrimitive.long
+        assertEquals(HttpStatusCode.NoContent, client.delete("$API/api-keys/$id") { header("Authorization", "Bearer $access") }.status)
+        assertEquals(HttpStatusCode.Unauthorized, me(key).status)
+        assertEquals(HttpStatusCode.OK, me(access).status)
+
+        // Ending a session stops its refresh token.
+        val fresh = login().obj()["refreshToken"]!!.jsonPrimitive.content
+        val all = client.get("$API/auth/sessions") { header("Authorization", "Bearer $access") }.obj()["sessions"]!!.jsonArray
+        all.forEach { client.delete("$API/auth/sessions/${it.jsonObject["id"]!!.jsonPrimitive.content}") { header("Authorization", "Bearer $access") } }
+        assertEquals(HttpStatusCode.Unauthorized, refresh(fresh).status)
+    }
+
+    @Test
+    fun newPasswordEndsSessions() = api {
+        val refreshToken = login().obj()["refreshToken"]!!.jsonPrimitive.content
+        PasswordService(db, UserRepository()).set("alice", "changed")
+        assertEquals(HttpStatusCode.Unauthorized, refresh(refreshToken).status)
+        assertEquals(HttpStatusCode.OK, login(pw = "changed").status)
+    }
+
+    @Test
+    fun publicEndpoints() = api {
         val web = token()
-        val apiToken = client.post("$API/tokens") { header("Authorization", "Bearer $web") }.obj()["token"]!!.jsonPrimitive.content
-        assertEquals("alice", client.get("$API/me") { header("Authorization", "Bearer $apiToken") }.obj()["username"]!!.jsonPrimitive.content)
-        // An API token cannot mint more tokens.
-        assertEquals(HttpStatusCode.Forbidden, client.post("$API/tokens") { header("Authorization", "Bearer $apiToken") }.status)
-        // Revoking API tokens leaves web tokens working.
-        assertEquals(HttpStatusCode.NoContent, client.delete("$API/tokens/api") { header("Authorization", "Bearer $web") }.status)
-        val revoked = client.get("$API/me") { header("Authorization", "Bearer $apiToken") }
-        assertEquals(HttpStatusCode.Unauthorized, revoked.status)
-        assertEquals("unauthorized", revoked.obj()["error"]!!.jsonPrimitive.content)
-        assertEquals(HttpStatusCode.OK, client.get("$API/me") { header("Authorization", "Bearer $web") }.status)
         assertEquals(HttpStatusCode.OK, client.get("$API/version").status)
         assertEquals("ok", client.get("/timetagger/status").bodyAsText())
         // The bare domain works as the base URL too.
@@ -188,8 +250,7 @@ class ApiTest {
                     .method(method, HttpRequest.BodyPublishers.ofString(body)).build(),
                 BodyHandlers.ofString(),
             ).body()
-            val basic = "Basic " + Base64.getEncoder().encodeToString("alice:secret".toByteArray())
-            val t = Json.parseToJsonElement(call("POST", "sessions", basic)).jsonObject["token"]!!.jsonPrimitive.content
+            val t = Json.parseToJsonElement(call("POST", "auth/login", "", """{"username":"alice","password":"secret"}""")).jsonObject["accessToken"]!!.jsonPrimitive.content
             val lines = http.send(
                 HttpRequest.newBuilder(URI("$base/changes/stream")).header("Authorization", "Bearer $t").build(),
                 BodyHandlers.ofLines(),
@@ -320,7 +381,8 @@ class V5MigrationTest {
                 c.createStatement().use { st ->
                     fun one(sql: String) = st.executeQuery(sql).let { it.next(); it.getString(1) }
                     assertEquals("hash", one("SELECT password_hash FROM users WHERE username = 'alex'"))
-                    assertEquals("seed1", one("SELECT api_token_seed FROM users"))
+                    // V7 drops the seeds: tokens from before the refresh-token scheme are void.
+                    assertEquals("0", one("SELECT count(*) FROM information_schema.columns WHERE column_name = 'api_token_seed'"))
                     assertNull(one("SELECT stop_at FROM records WHERE description = 'running'"))
                     assertEquals("1", one("SELECT count(*) FROM records WHERE deleted_at IS NOT NULL"))
                     assertEquals("call,work", one("SELECT string_agg(tag, ',' ORDER BY tag) FROM record_tags"))
