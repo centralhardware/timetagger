@@ -32,12 +32,16 @@ enum Period: String, CaseIterable, Identifiable {
 @MainActor
 final class Store: ObservableObject {
     @AppStorage("serverURL") var serverURL = "https://timetagger.app/timetagger"
+    @AppStorage("workTimeZone") var workTimeZoneID = "Europe/London"
+    @AppStorage("showWorkTime") var showWorkTime = true
     @Published var token = Keychain.load()
     @Published var period: Period = .today
     @Published var records: [Record] = []
     @Published var running: [Record] = []
     @Published var recent: [String] = []
     @Published var error: String?
+    @Published var lately: [Record] = []
+    private var recentDurations: [String: Int] = [:]
     @Published var now = Int(Date().timeIntervalSince1970)
 
     private var tick: Timer?
@@ -57,6 +61,36 @@ final class Store: ObservableObject {
     }
 
     var api: API { API(baseURL: serverURL, token: token) }
+
+    var workTimeZone: TimeZone { TimeZone(identifier: workTimeZoneID) ?? .current }
+
+    /// Clock time of a timestamp in the local or the work time zone.
+    func clock(_ t: Int, work: Bool = false) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        f.timeZone = work ? workTimeZone : .current
+        return f.string(from: Date(timeIntervalSince1970: TimeInterval(t)))
+    }
+
+    /// Short name of the work time zone's city ("Europe/London" → "London").
+    var workZoneName: String {
+        workTimeZoneID.split(separator: "/").last.map { $0.replacingOccurrences(of: "_", with: " ") } ?? workTimeZoneID
+    }
+
+    /// The second time zone is only worth showing when it differs from the Mac's.
+    var showsWorkZone: Bool {
+        showWorkTime && workTimeZone.secondsFromGMT() != TimeZone.current.secondsFromGMT()
+    }
+
+    /// The last few distinct descriptions, with the duration each took last time.
+    var resumable: [(String, Int)] {
+        recent.prefix(3).map { ds in (ds, recentDurations[ds] ?? 0) }
+    }
+
+    var todayTotal: Int {
+        let start = Int(Calendar.current.startOfDay(for: Date()).timeIntervalSince1970)
+        return lately.reduce(0) { $0 + max(0, ($1.isRunning ? now : $1.t2) - max($1.t1, start)) }
+    }
 
     var menuTitle: String {
         guard let r = running.first else { return "" }
@@ -88,12 +122,15 @@ final class Store: ObservableObject {
                 .sorted { $0.t1 > $1.t1 }
             // Running records and recent descriptions come from the last 30 days.
             let n = Int(Date().timeIntervalSince1970)
-            let lately = try await api.records(from: n - 30 * 86400, to: n + 86400).filter { !$0.isDeleted }
+            lately = try await api.records(from: n - 30 * 86400, to: n + 86400).filter { !$0.isDeleted }
             running = lately.filter(\.isRunning)
             var seen = Set<String>()
-            recent = lately.sorted { $0.t1 > $1.t1 }.map(\.ds)
+            let sorted = lately.sorted { $0.t1 > $1.t1 }
+            recent = sorted.filter { !$0.isRunning }.map(\.ds)
                 .filter { !$0.isEmpty && seen.insert($0).inserted }
                 .prefix(10).map { $0 }
+            recentDurations = [:]
+            for r in sorted.reversed() where !r.isRunning { recentDurations[r.ds] = r.duration() }
             error = nil
         } catch {
             self.error = error.localizedDescription
