@@ -6,6 +6,9 @@ struct MenuView: View {
     @State private var draft = ""
     @State private var editing: Record?
     @State private var showSettings = false
+    /// The day the list shows: today whenever the menu opens, ‹ › to move.
+    @State private var day = Calendar.current.startOfDay(for: Date())
+    @State private var dayRecords: [Record] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -20,24 +23,7 @@ struct MenuView: View {
                 idleCard
             }
 
-            if !store.resumable.isEmpty {
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("Resume").font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.horizontal, 6)
-                    ForEach(store.resumable, id: \.0) { ds, secs in
-                        Button { Task { await store.start(ds) } } label: {
-                            HStack {
-                                Text(ds).lineLimit(1)
-                                Spacer()
-                                Text(Store.format(secs, seconds: false)).monospacedDigit().foregroundStyle(.secondary)
-                            }
-                            .padding(.horizontal, 6)
-                            .frame(height: 36)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
+            daySection
 
             Divider()
 
@@ -54,6 +40,8 @@ struct MenuView: View {
                     NSApp.activate(ignoringOtherApps: true)
                 }
                 Menu {
+                    Text("TimeTaggerBar \(Store.appVersion)")
+                    Divider()
                     Button("Settings…") { showSettings = true }
                     Button("Refresh") { Task { await store.refresh() } }
                     Divider()
@@ -73,6 +61,87 @@ struct MenuView: View {
         }
         .sheet(isPresented: $showSettings) {
             SettingsView().environmentObject(store).padding()
+        }
+        .onAppear { day = Calendar.current.startOfDay(for: Date()) }
+        // Reload when the day changes and whenever the store has refreshed (a write here or anywhere else).
+        .task(id: "\(day.timeIntervalSince1970)-\(store.lately.hashValue)") { await loadDay() }
+    }
+
+    private var isToday: Bool { Calendar.current.isDateInToday(day) }
+
+    private var daySection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Button { move(-1) } label: { Image(systemName: "chevron.left") }
+                    .accessibilityLabel("Previous day")
+                Text(isToday ? "Today" : day.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated)))
+                    .font(.callout.weight(.semibold))
+                Button { move(1) } label: { Image(systemName: "chevron.right") }
+                    .disabled(isToday)
+                    .accessibilityLabel("Next day")
+                Spacer()
+                Text(Store.format(dayRecords.reduce(0) { $0 + $1.duration(now: store.now) }, seconds: false))
+                    .monospacedDigit().foregroundStyle(.secondary)
+            }
+            .buttonStyle(.borderless)
+            .padding(.horizontal, 6)
+
+            if dayRecords.isEmpty {
+                Text("No records").foregroundStyle(.secondary).font(.callout)
+                    .frame(maxWidth: .infinity, minHeight: 60)
+            } else {
+                ScrollView {
+                    VStack(spacing: 0) {
+                        ForEach(dayRecords) { r in dayRow(r) }
+                    }
+                }
+                .frame(maxHeight: 260)
+            }
+        }
+    }
+
+    private func dayRow(_ r: Record) -> some View {
+        HStack(spacing: 8) {
+            Text(store.clock(r.t1) + "–" + (r.isRunning ? "now" : store.clock(r.t2)))
+                .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                .frame(width: 82, alignment: .leading)
+            Text(r.ds.isEmpty ? "(no description)" : r.ds).lineLimit(1)
+            Spacer()
+            Text(Store.format(r.duration(now: store.now), seconds: false)).monospacedDigit().foregroundStyle(.secondary)
+            if !r.isRunning {
+                Button { Task { await store.start(r.ds) } } label: { Image(systemName: "play.fill") }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Resume \(r.ds)")
+            }
+        }
+        .font(.callout)
+        .padding(.horizontal, 6)
+        .frame(height: 32)
+        .contentShape(Rectangle())
+        .onTapGesture { editing = r }
+        .contextMenu {
+            Button("Edit…") { editing = r }
+            Button("Resume") { Task { await store.start(r.ds) } }
+            if r.isRunning { Button("Stop") { Task { await store.stop(r) } } }
+            Divider()
+            Button("Delete", role: .destructive) { Task { await store.delete(r) } }
+        }
+    }
+
+    private func move(_ days: Int) {
+        day = Calendar.current.date(byAdding: .day, value: days, to: day)!
+    }
+
+    private func loadDay() async {
+        let t1 = Int(day.timeIntervalSince1970)
+        let t2 = Int(Calendar.current.date(byAdding: .day, value: 1, to: day)!.timeIntervalSince1970)
+        do {
+            // Records that started this day, newest first.
+            dayRecords = try await store.api.records(from: t1, to: t2)
+                .filter { !$0.isDeleted && $0.t1 >= t1 && $0.t1 < t2 }
+                .sorted { $0.t1 > $1.t1 }
+        } catch {
+            store.error = error.localizedDescription
         }
     }
 

@@ -45,12 +45,10 @@ final class Store: ObservableObject {
     @Published var period: Period = .today
     @Published var records: [Record] = []
     @Published var running: [Record] = []
-    @Published var recent: [String] = []
     @Published var error: String?
     @Published var lately: [Record] = []
     /// Bumped after every write, so open windows know to reload.
     @Published var revision = 0
-    private var recentDurations: [String: Int] = [:]
     @Published var now = Int(Date().timeIntervalSince1970)
 
     private var tick: Timer?
@@ -122,6 +120,10 @@ final class Store: ObservableObject {
 
     var api: API { API(baseURL: serverURL, token: token) }
 
+    static var appVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+    }
+
     var workTimeZone: TimeZone { TimeZone(identifier: workTimeZoneID) ?? .current }
 
     /// Clock time of a timestamp in the local or the work time zone.
@@ -140,11 +142,6 @@ final class Store: ObservableObject {
     /// The second time zone is only worth showing when it differs from the Mac's.
     var showsWorkZone: Bool {
         showWorkTime && workTimeZone.secondsFromGMT() != TimeZone.current.secondsFromGMT()
-    }
-
-    /// The last few distinct descriptions, with the duration each took last time.
-    var resumable: [(String, Int)] {
-        recent.prefix(3).map { ds in (ds, recentDurations[ds] ?? 0) }
     }
 
     var todayTotal: Int {
@@ -182,17 +179,10 @@ final class Store: ObservableObject {
             records = try await api.records(from: t1, to: t2)
                 .filter { !$0.isDeleted }
                 .sorted { $0.t1 > $1.t1 }
-            // Running records and recent descriptions come from the last 30 days.
+            // Running records and today's total come from the last 30 days.
             let n = Int(Date().timeIntervalSince1970)
             lately = try await api.records(from: n - 30 * 86400, to: n + 86400).filter { !$0.isDeleted }
             running = lately.filter(\.isRunning)
-            var seen = Set<String>()
-            let sorted = lately.sorted { $0.t1 > $1.t1 }
-            recent = sorted.filter { !$0.isRunning }.map(\.ds)
-                .filter { !$0.isEmpty && seen.insert($0).inserted }
-                .prefix(10).map { $0 }
-            recentDurations = [:]
-            for r in sorted.reversed() where !r.isRunning { recentDurations[r.ds] = r.duration() }
             error = nil
         } catch {
             self.error = error.localizedDescription
@@ -247,7 +237,6 @@ final class Store: ObservableObject {
         running = []
         records = []
         lately = []
-        recent = []
     }
 
     nonisolated static func format(_ secs: Int, seconds: Bool = true) -> String {
