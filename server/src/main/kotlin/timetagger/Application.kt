@@ -28,6 +28,7 @@ import io.ktor.server.routing.Route
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import org.slf4j.LoggerFactory
+import kotlin.coroutines.cancellation.CancellationException
 import timetagger.auth.JwtCodec
 import timetagger.auth.PasswordService
 import timetagger.auth.TokenService
@@ -108,6 +109,8 @@ fun Application.module(config: Config, db: Database) {
             call.error(HttpStatusCode.UnprocessableEntity, "invalid", e.cause?.message ?: e.message.orEmpty())
         }
         exception<Throwable> { call, e ->
+            // A request cancelled because its client left is not an error.
+            if (e is CancellationException) throw e
             log.error("Unhandled error on {} {}", call.request.httpMethod.value, call.request.path(), e)
             call.error(HttpStatusCode.InternalServerError, "internal", "internal server error")
         }
