@@ -45,10 +45,13 @@ final class Store: ObservableObject {
 
     init() {
         tick = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.now = Int(Date().timeIntervalSince1970) }
+            MainActor.assumeIsolated { self?.now = Int(Date().timeIntervalSince1970) }
         }
         poll = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-            Task { await self?.refresh() }
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                Task { await self.refresh() }
+            }
         }
         Task { await refresh() }
     }
