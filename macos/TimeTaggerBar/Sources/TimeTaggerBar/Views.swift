@@ -211,39 +211,66 @@ struct SettingsView: View {
     @EnvironmentObject var store: Store
     @Environment(\.dismiss) private var dismiss
     @State private var url = ""
-    @State private var token = ""
+    @State private var username = ""
+    @State private var password = ""
     @State private var status = ""
+    @State private var busy = false
 
     var body: some View {
         Form {
-            TextField("Server URL", text: $url, prompt: Text("https://timetagger.example.com"))
-            SecureField("API token", text: $token)
-            Text("Get the API token in the web app: Account → API token.")
-                .font(.caption).foregroundStyle(.secondary)
-            Picker("Work time zone", selection: $store.workTimeZoneID) {
-                ForEach(TimeZone.knownTimeZoneIdentifiers, id: \.self) { Text($0).tag($0) }
-            }
-            Toggle("Show work time next to local time", isOn: $store.showWorkTime)
-            Toggle("Pause the running task while the Mac sleeps", isOn: $store.pauseOnSleep)
-            if !status.isEmpty { Text(status).font(.caption) }
-            HStack {
-                Button("Test") {
-                    Task {
-                        do { status = "OK: " + (try await API(baseURL: url, token: token).version()) }
-                        catch { status = error.localizedDescription }
+            Section("Account") {
+                if store.token.isEmpty {
+                    TextField("Server", text: $url, prompt: Text("https://timetagger.example.com"))
+                    TextField("Username", text: $username)
+                        .textContentType(.username)
+                    SecureField("Password", text: $password)
+                        .textContentType(.password)
+                        .onSubmit(signIn)
+                    HStack {
+                        if !status.isEmpty { Text(status).font(.caption).foregroundStyle(.red) }
+                        Spacer()
+                        Button("Sign In", action: signIn)
+                            .keyboardShortcut(.defaultAction)
+                            .disabled(busy || url.isEmpty || username.isEmpty || password.isEmpty)
+                    }
+                } else {
+                    LabeledContent("Server", value: store.serverURL)
+                    LabeledContent("Signed in as", value: store.username.isEmpty ? "—" : store.username)
+                    HStack {
+                        Spacer()
+                        Button("Sign Out") { store.signOut() }
                     }
                 }
-                Spacer()
-                Button("Close") { dismiss() }
-                Button("Save") {
-                    Task { await store.saveSettings(url: url, token: token) }
-                    dismiss()
+            }
+            Section("Time") {
+                Picker("Work time zone", selection: $store.workTimeZoneID) {
+                    ForEach(TimeZone.knownTimeZoneIdentifiers, id: \.self) { Text($0).tag($0) }
                 }
-                .keyboardShortcut(.defaultAction)
+                Toggle("Show work time next to local time", isOn: $store.showWorkTime)
+                Toggle("Pause the running task while the Mac sleeps", isOn: $store.pauseOnSleep)
+            }
+            HStack {
+                Spacer()
+                Button("Done") { dismiss() }
             }
         }
-        .frame(width: 400)
-        .onAppear { url = store.serverURL; token = store.token }
+        .formStyle(.grouped)
+        .frame(width: 420)
+        .onAppear { url = store.serverURL; username = store.username }
+    }
+
+    private func signIn() {
+        busy = true
+        status = ""
+        Task {
+            do {
+                try await store.signIn(url: url, username: username, password: password)
+                password = ""
+            } catch {
+                status = error.localizedDescription
+            }
+            busy = false
+        }
     }
 }
 

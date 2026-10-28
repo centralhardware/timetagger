@@ -36,6 +36,7 @@ final class Store: ObservableObject {
     @AppStorage("workTimeZone") var workTimeZoneID = "Europe/London"
     @AppStorage("showWorkTime") var showWorkTime = true
     @AppStorage("pauseOnSleep") var pauseOnSleep = true
+    @AppStorage("username") var username = ""
     @Published var token = Keychain.load()
     @Published var period: Period = .today
     @Published var records: [Record] = []
@@ -213,11 +214,23 @@ final class Store: ObservableObject {
         await save([r])
     }
 
-    func saveSettings(url: String, token: String) async {
+    func signIn(url: String, username: String, password: String) async throws {
+        let token = try await API.login(baseURL: url, username: username, password: password)
         serverURL = url
+        self.username = username
         self.token = token
         Keychain.save(token)
         await refresh()
+    }
+
+    func signOut() {
+        token = ""
+        username = ""
+        Keychain.save("")
+        running = []
+        records = []
+        lately = []
+        recent = []
     }
 
     nonisolated static func format(_ secs: Int, seconds: Bool = true) -> String {

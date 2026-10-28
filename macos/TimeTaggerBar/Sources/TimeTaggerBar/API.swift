@@ -37,7 +37,7 @@ enum APIError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .notConfigured: return "Set the server URL and API token in Settings."
+        case .notConfigured: return "Sign in from Settings."
         case let .http(code, body): return "HTTP \(code): \(body)"
         }
     }
@@ -80,6 +80,22 @@ struct API {
         struct Resp: Decodable { let failed: [String]; let errors: [String] }
         let resp = try JSONDecoder().decode(Resp.self, from: try await send(req))
         if !resp.failed.isEmpty { throw APIError.http(200, resp.errors.joined(separator: "; ")) }
+    }
+
+    /// Exchanges a username and password for a long-lived API token, the way the
+    /// web app's login page does: credentials → web token → API token.
+    static func login(baseURL: String, username: String, password: String) async throws -> String {
+        struct Token: Decodable { let token: String }
+        var req = URLRequest(url: try API(baseURL: baseURL, token: "-").url("bootstrap_authentication"))
+        req.httpMethod = "POST"
+        let creds = ["method": "usernamepassword", "username": username, "password": password]
+        req.httpBody = try JSONEncoder().encode(creds).base64EncodedData()
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        guard code == 200 else { throw APIError.http(code, String(decoding: data, as: UTF8.self)) }
+        let webtoken = try JSONDecoder().decode(Token.self, from: data).token
+        let apiData = try await API(baseURL: baseURL, token: webtoken).send(URLRequest(url: try API(baseURL: baseURL, token: webtoken).url("apitoken")))
+        return try JSONDecoder().decode(Token.self, from: apiData).token
     }
 
     func version() async throws -> String {
