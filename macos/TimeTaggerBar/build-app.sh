@@ -21,7 +21,16 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </dict></plist>
 PLIST
 codesign --force --sign - "$APP"
-(cd build && ditto -c -k --keepParent TimeTaggerBar.app TimeTaggerBar.zip)
-rm -rf build/dmg && mkdir build/dmg && cp -R "$APP" build/dmg/ && ln -s /Applications build/dmg/Applications
-hdiutil create -volname TimeTaggerBar -srcfolder build/dmg -ov -format UDZO build/TimeTaggerBar.dmg
-echo "Built $APP and build/TimeTaggerBar.dmg"
+
+# Standard drag-to-Applications installer window.
+rm -f build/TimeTaggerBar.dmg
+create-dmg \
+  --volname TimeTaggerBar \
+  --window-size 600 380 \
+  --icon-size 112 \
+  --icon TimeTaggerBar.app 160 170 \
+  --app-drop-link 440 170 \
+  --hide-extension TimeTaggerBar.app \
+  --no-internet-enable \
+  build/TimeTaggerBar.dmg "$APP"
+echo "Built build/TimeTaggerBar.dmg"

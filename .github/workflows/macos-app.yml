@@ -12,10 +12,9 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
+      - run: brew install create-dmg
       - run: ./macos/TimeTaggerBar/build-app.sh
       - uses: actions/upload-artifact@v4
         with:
           name: TimeTaggerBar
-          path: |
-            macos/TimeTaggerBar/build/TimeTaggerBar.dmg
-            macos/TimeTaggerBar/build/TimeTaggerBar.zip
+          path: macos/TimeTaggerBar/build/TimeTaggerBar.dmg
