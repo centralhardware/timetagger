@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import AppKit
 
 enum Period: String, CaseIterable, Identifiable {
     case today = "Today", yesterday = "Yesterday", week = "This week", month = "This month"
@@ -34,6 +35,7 @@ final class Store: ObservableObject {
     @AppStorage("serverURL") var serverURL = "https://timetagger.app/timetagger"
     @AppStorage("workTimeZone") var workTimeZoneID = "Europe/London"
     @AppStorage("showWorkTime") var showWorkTime = true
+    @AppStorage("pauseOnSleep") var pauseOnSleep = true
     @Published var token = Keychain.load()
     @Published var period: Period = .today
     @Published var records: [Record] = []
@@ -46,6 +48,9 @@ final class Store: ObservableObject {
 
     private var tick: Timer?
     private var poll: Timer?
+    /// The records that were running when the Mac went to sleep, and when it did.
+    private var paused: [Record] = []
+    private var sleptAt = 0
 
     init() {
         tick = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
@@ -57,7 +62,44 @@ final class Store: ObservableObject {
                 Task { await self.refresh() }
             }
         }
+        let ws = NSWorkspace.shared.notificationCenter
+        ws.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.willSleep() }
+        }
+        ws.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                Task { await self.didWake() }
+            }
+        }
         Task { await refresh() }
+    }
+
+    /// Closing the lid stops the running record at that moment; the network may
+    /// already be gone, so didWake() repeats the stop before resuming.
+    private func willSleep() {
+        guard pauseOnSleep, !running.isEmpty else { return }
+        paused = running
+        sleptAt = Int(Date().timeIntervalSince1970)
+        let stopped = stoppedCopies(paused, at: sleptAt)
+        Task { try? await api.put(stopped) }
+    }
+
+    /// Opening the lid resumes what was paused as a new record.
+    private func didWake() async {
+        guard !paused.isEmpty else { return }
+        let toResume = paused
+        paused = []
+        // Give Wi-Fi a moment to come back.
+        try? await Task.sleep(nanoseconds: 5_000_000_000)
+        let t = Int(Date().timeIntervalSince1970)
+        let resumed = toResume.map { Record(key: Record.newKey(), mt: t, t1: t, t2: t, ds: $0.ds, deleted: 0) }
+        await save(stoppedCopies(toResume, at: sleptAt) + resumed)
+    }
+
+    private func stoppedCopies(_ recs: [Record], at t: Int) -> [Record] {
+        let mt = Int(Date().timeIntervalSince1970)
+        return recs.map { var r = $0; r.t2 = max(t, r.t1 + 1); r.mt = mt; return r }
     }
 
     var api: API { API(baseURL: serverURL, token: token) }
