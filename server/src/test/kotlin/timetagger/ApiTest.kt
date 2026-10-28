@@ -13,6 +13,8 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
+import io.ktor.server.cio.CIO
+import io.ktor.server.engine.embeddedServer
 import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
 import io.zonky.test.db.postgres.embedded.EmbeddedPostgres
@@ -28,6 +30,9 @@ import timetagger.auth.PasswordService
 import timetagger.config.Config
 import timetagger.db.Database
 import timetagger.db.UserRepository
+import java.net.URI
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse.BodyHandlers
 import java.util.Base64
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
@@ -146,6 +151,31 @@ class ApiTest {
         send("PUT", "records/$c", """{"start":"2026-10-28T11:00:00Z","stop":"2026-10-28T11:30:00Z","description":"next"}""")
         val after = client.get("$API/changes?since=$rev") { header("Authorization", "Bearer $t") }.obj()
         assertEquals(listOf(c), after["records"]!!.jsonArray.map { it.jsonObject["id"]!!.jsonPrimitive.long })
+    }
+
+    /** Over a real server: the test engine holds a streamed response back until it ends. */
+    @Test
+    fun changeStream() {
+        val server = embeddedServer(CIO, port = 0) { module(Config(jwtKey = "test-key"), db) }.start()
+        try {
+            val base = runBlocking { "http://localhost:${server.engine.resolvedConnectors().first().port}$API" }
+            val http = java.net.http.HttpClient.newHttpClient()
+            fun call(method: String, path: String, auth: String, body: String = "") = http.send(
+                HttpRequest.newBuilder(URI("$base/$path")).header("Authorization", auth).header("Content-Type", "application/json")
+                    .method(method, HttpRequest.BodyPublishers.ofString(body)).build(),
+                BodyHandlers.ofString(),
+            ).body()
+            val basic = "Basic " + Base64.getEncoder().encodeToString("alice:secret".toByteArray())
+            val t = Json.parseToJsonElement(call("POST", "sessions", basic)).jsonObject["token"]!!.jsonPrimitive.content
+            val lines = http.send(
+                HttpRequest.newBuilder(URI("$base/changes/stream")).header("Authorization", "Bearer $t").build(),
+                BodyHandlers.ofLines(),
+            ).body().iterator()
+            call("POST", "records", "Bearer $t", """{"start":"2026-10-28T08:00:00Z"}""")
+            assertEquals("event: change", lines.asSequence().first { it.startsWith("event:") })
+        } finally {
+            server.stop(0, 0)
+        }
     }
 
     @Test

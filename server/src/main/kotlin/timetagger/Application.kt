@@ -5,6 +5,7 @@ import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.install
+import io.ktor.server.sse.SSE
 import io.ktor.server.auth.Authentication
 import io.ktor.server.auth.UserIdPrincipal
 import io.ktor.server.auth.authenticate
@@ -68,6 +69,7 @@ fun Application.module(config: Config, db: Database) {
     val services = Services(db, config.jwtKey)
 
     install(ContentNegotiation) { json(ApiJson) }
+    install(SSE)
     install(Authentication) {
         basic(LOGIN) {
             realm = "TimeTagger"

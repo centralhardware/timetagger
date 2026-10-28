@@ -63,7 +63,8 @@ final class Store: ObservableObject {
         tick = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.now = Int(Date().timeIntervalSince1970) }
         }
-        poll = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+        // Changes arrive through watchChanges(); the poll only covers a stream that is down.
+        poll = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 Task { await self.refresh() }
@@ -80,6 +81,17 @@ final class Store: ObservableObject {
             }
         }
         Task { await refresh() }
+        Task { await watchChanges() }
+    }
+
+    /// Refreshes as soon as any client writes, reconnecting whenever the stream drops.
+    private func watchChanges() async {
+        while true {
+            try? await api.watch { [weak self] in await self?.refresh() }
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            // Catch up on whatever was written while the stream was down.
+            await refresh()
+        }
     }
 
     /// Closing the lid stops the running record at that moment; the network may

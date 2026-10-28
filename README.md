@@ -55,7 +55,9 @@ Or use the Docker image `ghcr.io/centralhardware/timetagger` with
 * errors are `ApiException`s, which `StatusPages` turns into JSON error responses
 
 Tables: `users`, `records` (one row per record, `stop_at` NULL while running, `deleted_at` for
-deletes), `record_tags`, `settings`; every write takes a new value from `revision_seq`.
+deletes), `record_tags`, `settings`; every write takes a new value from `revision_seq`. A
+user's writes take a lock on their `users` row, so their revisions become visible in order
+and `GET changes` never skips one.
 
 
 ## Configuration
@@ -89,6 +91,7 @@ Everything except `version` and `sessions` needs `Authorization: Bearer <token>`
 | `POST records/batch` | `{records: [...]}` in one transaction; entries with an `id` update, others create |
 | `GET settings`, `GET / PUT settings/{key}` | `{value}` is any JSON |
 | `GET changes?since=<revision>` | everything written after that revision, deletes included |
+| `GET changes/stream` | server-sent events: `change` after every write, heartbeat every 30 s |
 | `GET version`, `GET <prefix>status` | |
 
 A record is `{id, start, stop, description, tags, deletedAt, revision}`; it is

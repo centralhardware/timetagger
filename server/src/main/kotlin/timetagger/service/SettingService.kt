@@ -16,7 +16,7 @@ class SettingService(private val db: Database, private val settings: SettingRepo
     suspend fun get(userId: Long, key: String): Setting = db.io { settings.get(it, userId, key) } ?: throw NotFound("setting $key")
 
     /** A write based on a stale revision is ignored and the stored setting returned. */
-    suspend fun put(userId: Long, key: String, input: SettingInput): Setting = db.tx { session ->
+    suspend fun put(userId: Long, key: String, input: SettingInput): Setting = db.write(userId) { session ->
         if (!KEY.matches(key)) throw Invalid("key must be 1-64 letters, digits, '.', '-' or '_'")
         if (input.value.toString().length > VALUE_MAX) throw Invalid("value must be at most $VALUE_MAX characters as JSON")
         val cur = settings.get(session, userId, key)

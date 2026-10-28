@@ -18,16 +18,16 @@ class RecordService(private val db: Database, private val records: RecordReposit
 
     suspend fun get(userId: Long, id: String): Record = db.io { records.get(it, userId, recordId(id)) } ?: throw NotFound("record $id")
 
-    suspend fun create(userId: Long, input: RecordInput): Record = db.tx { create(it, userId, input) }
+    suspend fun create(userId: Long, input: RecordInput): Record = db.write(userId) { create(it, userId, input) }
 
-    suspend fun update(userId: Long, id: String, input: RecordInput): Record = db.tx { update(it, userId, recordId(id), input) }
+    suspend fun update(userId: Long, id: String, input: RecordInput): Record = db.write(userId) { update(it, userId, recordId(id), input) }
 
     /** All or nothing: one invalid, missing or conflicting record rejects the whole batch. */
-    suspend fun saveAll(userId: Long, inputs: List<RecordInput>): List<Record> = db.tx { session ->
+    suspend fun saveAll(userId: Long, inputs: List<RecordInput>): List<Record> = db.write(userId) { session ->
         inputs.map { input -> input.id?.let { update(session, userId, it, input) } ?: create(session, userId, input) }
     }
 
-    suspend fun delete(userId: Long, id: String) = db.tx { session ->
+    suspend fun delete(userId: Long, id: String) = db.write(userId) { session ->
         val cur = records.get(session, userId, recordId(id)) ?: throw NotFound("record $id")
         if (cur.deletedAt == null) {
             records.update(session, userId, recordId(id), cur.start, cur.stop, cur.description, Instant.now())

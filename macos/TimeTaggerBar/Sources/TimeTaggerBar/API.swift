@@ -166,6 +166,22 @@ struct API {
         return try decoder.decode(Token.self, from: try await web.send(tokenReq)).token
     }
 
+    /// Follows the server's change stream, calling onChange after every write by any client.
+    /// Returns when the stream ends; throws when it can't be opened.
+    func watch(onChange: @escaping () async -> Void) async throws {
+        guard !token.isEmpty else { throw APIError.notConfigured }
+        var req = URLRequest(url: try url("changes/stream"))
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        // The server sends a heartbeat every 30 s, so a silent minute means the connection is gone.
+        req.timeoutInterval = 90
+        let (bytes, resp) = try await URLSession.shared.bytes(for: req)
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200..<300).contains(code) else { throw APIError.http(code, "change stream unavailable") }
+        for try await line in bytes.lines where line == "event: change" {
+            await onChange()
+        }
+    }
+
     func version() async throws -> String {
         String(decoding: try await send(URLRequest(url: try url("version")), auth: false), as: UTF8.self)
     }
