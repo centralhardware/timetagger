@@ -12,6 +12,7 @@ import timetagger.model.RecordInput
 import java.time.Instant
 
 private const val DESCRIPTION_MAX = 1000
+private val FAR_FUTURE: Instant = Instant.parse("9999-12-31T00:00:00Z")
 
 class RecordService(private val db: Database, private val records: RecordRepository) {
     suspend fun find(userId: Long, filter: RecordFilter): List<Record> = db.io { records.find(it, userId, filter) }
@@ -38,7 +39,15 @@ class RecordService(private val db: Database, private val records: RecordReposit
 
     private fun create(session: Session, userId: Long, input: RecordInput): Record {
         validate(input)
+        if (input.stop == null && !input.deleted) stopRunning(session, userId, input.start)
         return records.create(session, userId, input.start, input.stop, input.description.trim(), Instant.now().takeIf { input.deleted })
+    }
+
+    /** Only one record runs at a time: starting one stops whatever was running, when the new one starts. */
+    private fun stopRunning(session: Session, userId: Long, at: Instant) {
+        for (r in records.find(session, userId, RecordFilter(from = Instant.EPOCH, to = FAR_FUTURE, running = true))) {
+            records.update(session, userId, r.id, r.start, maxOf(at, r.start), r.description, null)
+        }
     }
 
     private fun update(session: Session, userId: Long, id: Long, input: RecordInput): Record {

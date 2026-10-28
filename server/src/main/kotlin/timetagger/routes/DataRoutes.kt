@@ -30,24 +30,29 @@ import timetagger.model.TagList
 import timetagger.service.RecordService
 import timetagger.service.SettingService
 import timetagger.service.SyncService
+import java.time.Instant
 import kotlin.time.Duration.Companion.seconds
 import org.slf4j.LoggerFactory
 
 private val log = LoggerFactory.getLogger("timetagger.sync")
 
 /**
- * GET /records?from&to[&tag=a&tag=b][&running][&deleted]; POST /records creates one;
+ * GET /records?from&to[&tag=a&tag=b][&running][&deleted][&q=text] (with q, from and to are optional);
+ * POST /records creates one, stopping any running record if it is itself running;
  * GET, PUT and DELETE /records/{id}; POST /records/batch writes several in one transaction;
  * GET /records/tags lists the tags in use, most recent first (for autocomplete).
  */
 fun Route.recordRoutes(records: RecordService) = route("records") {
     get {
+        val q = call.request.queryParameters["q"]?.trim()?.takeIf { it.isNotEmpty() }
         val filter = RecordFilter(
-            from = call.instantParam("from") ?: throw Invalid("from is required"),
-            to = call.instantParam("to") ?: throw Invalid("to is required"),
+            // A search may span all time; a plain listing needs its range.
+            from = call.instantParam("from") ?: if (q != null) Instant.EPOCH else throw Invalid("from is required"),
+            to = call.instantParam("to") ?: if (q != null) Instant.parse("9999-12-31T00:00:00Z") else throw Invalid("to is required"),
             tags = call.request.queryParameters.getAll("tag").orEmpty().filter { it.isNotBlank() },
             running = call.boolParam("running"),
             deleted = call.boolParam("deleted") ?: false,
+            text = q,
         )
         call.respond(RecordList(records.find(call.auth.userId, filter)))
     }
