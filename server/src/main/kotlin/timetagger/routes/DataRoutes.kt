@@ -26,6 +26,7 @@ import timetagger.model.RecordInput
 import timetagger.model.RecordList
 import timetagger.model.SettingInput
 import timetagger.model.SettingList
+import timetagger.model.TagList
 import timetagger.service.RecordService
 import timetagger.service.SettingService
 import timetagger.service.SyncService
@@ -36,7 +37,8 @@ private val log = LoggerFactory.getLogger("timetagger.sync")
 
 /**
  * GET /records?from&to[&tag=a&tag=b][&running][&deleted]; POST /records creates one;
- * GET, PUT and DELETE /records/{id}; POST /records/batch writes several in one transaction.
+ * GET, PUT and DELETE /records/{id}; POST /records/batch writes several in one transaction;
+ * GET /records/tags lists the tags in use, most recent first (for autocomplete).
  */
 fun Route.recordRoutes(records: RecordService) = route("records") {
     get {
@@ -54,6 +56,7 @@ fun Route.recordRoutes(records: RecordService) = route("records") {
         call.response.header(HttpHeaders.Location, "${call.request.path()}/${created.id}")
         call.respond(HttpStatusCode.Created, created)
     }
+    get("tags") { call.respond(TagList(records.tags(call.auth.userId))) }
     post("batch") { call.respond(RecordList(records.saveAll(call.auth.userId, call.receive<RecordBatch>().records))) }
     route("{id}") {
         get { call.respond(records.get(call.auth.userId, call.path("id"))) }
