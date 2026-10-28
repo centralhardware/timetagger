@@ -405,72 +405,88 @@ struct SettingsView: View {
     @State private var busy = false
 
     var body: some View {
-        Form {
-            Section("Account") {
-                if !store.signedIn {
-                    TextField("Server", text: $url, prompt: Text("https://timetagger.example.com"))
-                    TextField("Username", text: $username)
-                        .textContentType(.username)
-                    SecureField("Password", text: $password)
-                        .textContentType(.password)
-                        .onSubmit(signIn)
-                    HStack {
-                        if !status.isEmpty { Text(status).font(.caption).foregroundStyle(.red) }
-                        Spacer()
-                        Button("Sign In", action: signIn)
-                            .keyboardShortcut(.defaultAction)
-                            .disabled(busy || url.isEmpty || username.isEmpty || password.isEmpty)
+        // Tabs, the way macOS settings windows go: each one fits without scrolling.
+        TabView {
+            tab {
+                Section("Account") {
+                    if !store.signedIn {
+                        TextField("Server", text: $url, prompt: Text("https://timetagger.example.com"))
+                        TextField("Username", text: $username)
+                            .textContentType(.username)
+                        SecureField("Password", text: $password)
+                            .textContentType(.password)
+                            .onSubmit(signIn)
+                        HStack {
+                            if !status.isEmpty { Text(status).font(.caption).foregroundStyle(.red) }
+                            Spacer()
+                            Button("Sign In", action: signIn)
+                                .keyboardShortcut(.defaultAction)
+                                .disabled(busy || url.isEmpty || username.isEmpty || password.isEmpty)
+                        }
+                    } else {
+                        LabeledContent("Server", value: store.serverURL)
+                        LabeledContent("Signed in as", value: store.username.isEmpty ? "—" : store.username)
+                        HStack {
+                            Spacer()
+                            Button("Sign Out") { Task { await store.signOut() } }
+                        }
                     }
-                } else {
-                    LabeledContent("Server", value: store.serverURL)
-                    LabeledContent("Signed in as", value: store.username.isEmpty ? "—" : store.username)
-                    HStack {
-                        Spacer()
-                        Button("Sign Out") { Task { await store.signOut() } }
+                }
+                if store.signedIn { AccessSection() }
+            }
+            .tabItem { Label("Account", systemImage: "person.crop.circle") }
+            tab {
+                Section("Time") {
+                    Picker("Work time zone", selection: $store.workTimeZoneID) {
+                        ForEach(TimeZone.knownTimeZoneIdentifiers, id: \.self) { Text($0).tag($0) }
+                    }
+                    Toggle("Show work time next to local time", isOn: $store.showWorkTime)
+                    Toggle("Pause the running task while the Mac sleeps", isOn: $store.pauseOnSleep)
+                }
+                Section("General") {
+                    Toggle("Open at login", isOn: $openAtLogin)
+                        .onChange(of: openAtLogin) { on in setOpenAtLogin(on) }
+                    if !loginError.isEmpty { Text(loginError).font(.caption).foregroundStyle(.red) }
+                }
+                Section("Tickets") {
+                    TextField("Ticket URL", text: $store.ticketURL, prompt: Text("https://company.atlassian.net/browse/{key}"))
+                    Text("A tag like #sm-1061 links to this URL with {key} = SM-1061.").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .tabItem { Label("General", systemImage: "gearshape") }
+            tab {
+                Section("Reminders") {
+                    Toggle("Remind me when nothing is tracked", isOn: $store.remindIdle)
+                    if store.remindIdle {
+                        Stepper("Working hours from \(store.workStartHour):00", value: $store.workStartHour, in: 0...23)
+                        Stepper("to \(store.workEndHour):00, weekdays", value: $store.workEndHour, in: 1...24)
                     }
                 }
             }
-            Section("Time") {
-                Picker("Work time zone", selection: $store.workTimeZoneID) {
-                    ForEach(TimeZone.knownTimeZoneIdentifiers, id: \.self) { Text($0).tag($0) }
-                }
-                Toggle("Show work time next to local time", isOn: $store.showWorkTime)
-                Toggle("Pause the running task while the Mac sleeps", isOn: $store.pauseOnSleep)
-            }
-            if store.signedIn { AccessSection() }
-            Section("Reminders") {
-                Toggle("Remind me when nothing is tracked", isOn: $store.remindIdle)
-                if store.remindIdle {
-                    Stepper("Working hours from \(store.workStartHour):00", value: $store.workStartHour, in: 0...23)
-                    Stepper("to \(store.workEndHour):00, weekdays", value: $store.workEndHour, in: 1...24)
+            .tabItem { Label("Reminders", systemImage: "bell") }
+            tab {
+                Section("About") {
+                    LabeledContent("TimeTaggerBar", value: Store.appVersion)
+                    LabeledContent("Server", value: store.serverVersion)
+                    if let u = store.update {
+                        Link("Version \(u.version) is available", destination: u.url)
+                    } else {
+                        Button("Check for Updates") { Task { await store.checkForUpdate() } }
+                    }
                 }
             }
-            Section("Tickets") {
-                TextField("Ticket URL", text: $store.ticketURL, prompt: Text("https://company.atlassian.net/browse/{key}"))
-                Text("A tag like #sm-1061 links to this URL with {key} = SM-1061.").font(.caption).foregroundStyle(.secondary)
-            }
-            Section("General") {
-                Toggle("Open at login", isOn: $openAtLogin)
-                    .onChange(of: openAtLogin) { on in setOpenAtLogin(on) }
-                if !loginError.isEmpty { Text(loginError).font(.caption).foregroundStyle(.red) }
-            }
-            Section("About") {
-                LabeledContent("TimeTaggerBar", value: Store.appVersion)
-                LabeledContent("Server", value: store.serverVersion)
-                if let u = store.update {
-                    Link("Version \(u.version) is available", destination: u.url)
-                } else {
-                    Button("Check for Updates") { Task { await store.checkForUpdate() } }
-                }
-            }
+            .tabItem { Label("About", systemImage: "info.circle") }
         }
-        .formStyle(.grouped)
-        // Sized to its content: everything shows at once, no scrolling.
-        .scrollDisabled(true)
-        .frame(width: 440)
-        .fixedSize(horizontal: false, vertical: true)
+        .frame(width: 480)
         .onAppear { url = store.serverURL; username = store.username }
         .task(id: store.serverURL) { store.serverVersion = (try? await store.api.version()) ?? "unreachable" }
+    }
+
+    private func tab(@ViewBuilder _ content: () -> some View) -> some View {
+        Form { content() }
+            .formStyle(.grouped)
+            .scrollDisabled(true)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private func setOpenAtLogin(_ on: Bool) {
