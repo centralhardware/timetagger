@@ -23,7 +23,7 @@ PLIST
 codesign --force --sign - "$APP"
 
 # Standard drag-to-Applications installer window.
-rm -f build/TimeTaggerBar.dmg
+rm -rf build/TimeTaggerBar.dmg build/dmg && mkdir build/dmg && cp -R "$APP" build/dmg/
 create-dmg \
   --volname TimeTaggerBar \
   --window-size 600 380 \
@@ -32,5 +32,5 @@ create-dmg \
   --app-drop-link 440 170 \
   --hide-extension TimeTaggerBar.app \
   --no-internet-enable \
-  build/TimeTaggerBar.dmg "$APP"
+  build/TimeTaggerBar.dmg build/dmg
 echo "Built build/TimeTaggerBar.dmg"
