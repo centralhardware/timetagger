@@ -53,11 +53,6 @@ struct MenuView: View {
                     openWindow(id: "report")
                     NSApp.activate(ignoringOtherApps: true)
                 }
-                Button("Open TimeTagger") {
-                    if let url = URL(string: store.serverURL.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/app/") {
-                        NSWorkspace.shared.open(url)
-                    }
-                }
                 Menu {
                     Button("Settings…") { showSettings = true }
                     Button("Refresh") { Task { await store.refresh() } }
