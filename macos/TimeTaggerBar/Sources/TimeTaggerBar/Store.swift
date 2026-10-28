@@ -47,7 +47,9 @@ final class Store: ObservableObject {
     @AppStorage("remindIdle") var remindIdle = true
     @AppStorage("workStartHour") var workStartHour = 9
     @AppStorage("workEndHour") var workEndHour = 18
-    @Published var token = Keychain.load()
+    /// Signed in while the keychain holds a refresh token; the server signing us out clears it.
+    @Published var signedIn = !Keychain.load().isEmpty
+    let session = AuthSession()
     @Published var period: Period = .today
     @Published var records: [Record] = []
     @Published var running: [Record] = []
@@ -147,7 +149,7 @@ final class Store: ObservableObject {
         recs.map { var r = $0; r.t2 = max(t, r.t1 + 1); return r }
     }
 
-    var api: API { API(baseURL: serverURL, token: token) }
+    var api: API { API(baseURL: serverURL, session: session) }
 
     static var appVersion: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
@@ -203,6 +205,7 @@ final class Store: ObservableObject {
     }
 
     func refresh() async {
+        guard signedIn else { return }
         do {
             let (t1, t2) = period.range
             records = try await api.records(from: t1, to: t2)
@@ -216,6 +219,9 @@ final class Store: ObservableObject {
             tags = (try? await api.tags()) ?? tags
             serverVersion = (try? await api.version()) ?? "unreachable"
             error = nil
+        } catch APIError.signedOut {
+            signedOutLocally()
+            self.error = APIError.signedOut.localizedDescription
         } catch {
             self.error = error.localizedDescription
         }
@@ -248,7 +254,7 @@ final class Store: ObservableObject {
 
     /// A notification when nothing is tracked during working hours on a weekday, at most every 30 minutes.
     private func nagIfIdle() {
-        guard remindIdle, !token.isEmpty, running.isEmpty else { return }
+        guard remindIdle, signedIn, running.isEmpty else { return }
         let cal = Calendar.current
         let date = Date(timeIntervalSince1970: TimeInterval(now))
         let hour = cal.component(.hour, from: date)
@@ -299,18 +305,22 @@ final class Store: ObservableObject {
     }
 
     func signIn(url: String, username: String, password: String) async throws {
-        let token = try await API.login(baseURL: url, username: username, password: password)
+        try await API(baseURL: url, session: session).login(username: username, password: password)
         serverURL = url
         self.username = username
-        self.token = token
-        Keychain.save(token)
+        signedIn = true
         await refresh()
     }
 
-    func signOut() {
-        token = ""
+    func signOut() async {
+        await api.logout()
+        signedOutLocally()
+    }
+
+    /// What's left to do once the session is gone, by choice or because the server ended it.
+    private func signedOutLocally() {
+        signedIn = false
         username = ""
-        Keychain.save("")
         running = []
         records = []
         lately = []

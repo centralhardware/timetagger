@@ -211,6 +211,78 @@ struct MenuView: View {
     }
 }
 
+/// Signed-in devices and API keys for scripts, each revocable on its own.
+struct AccessSection: View {
+    @EnvironmentObject var store: Store
+    @State private var sessions: [API.SignedInSession] = []
+    @State private var keys: [API.ApiKey] = []
+    @State private var newKeyName = ""
+    /// A just-created key, shown until the window closes: the server never shows it again.
+    @State private var created: API.ApiKey?
+    @State private var problem = ""
+
+    var body: some View {
+        Section("Signed-in devices") {
+            ForEach(sessions) { s in
+                LabeledContent(s.userAgent ?? "Unknown device") {
+                    HStack {
+                        Text(s.lastRefreshedAt, format: .relative(presentation: .named)).foregroundStyle(.secondary)
+                        Button("Sign Out") { run { try await store.api.endSession(s.id) } }
+                    }
+                }
+            }
+        }
+        Section("API keys") {
+            ForEach(keys) { k in
+                LabeledContent(k.name) {
+                    HStack {
+                        Text("\(k.prefix)…").font(.caption.monospaced()).foregroundStyle(.secondary)
+                        Button("Revoke") { run { try await store.api.revokeApiKey(k.id) } }
+                    }
+                }
+            }
+            if let key = created?.key {
+                HStack {
+                    Text(key).font(.caption.monospaced()).textSelection(.enabled).lineLimit(1).truncationMode(.middle)
+                    Button("Copy") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(key, forType: .string)
+                    }
+                }
+                Text("Copy it now: it won't be shown again.").font(.caption).foregroundStyle(.secondary)
+            }
+            HStack {
+                TextField("New key name", text: $newKeyName, prompt: Text("e.g. merge cron"))
+                Button("Create") {
+                    let name = newKeyName
+                    run {
+                        created = try await store.api.createApiKey(name: name)
+                        newKeyName = ""
+                    }
+                }
+            }
+            if !problem.isEmpty { Text(problem).font(.caption).foregroundStyle(.red) }
+        }
+        .task { await load() }
+    }
+
+    private func run(_ op: @escaping () async throws -> Void) {
+        Task {
+            do { try await op(); problem = "" } catch { problem = error.localizedDescription }
+            await load()
+        }
+    }
+
+    private func load() async {
+        do {
+            sessions = try await store.api.sessions()
+            keys = try await store.api.apiKeys()
+        } catch {
+            problem = error.localizedDescription
+        }
+    }
+}
+
 /// "Open SM-1061" for every ticket tag on the record, when a ticket URL is set.
 struct TicketLinks: View {
     @EnvironmentObject var store: Store
@@ -335,7 +407,7 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section("Account") {
-                if store.token.isEmpty {
+                if !store.signedIn {
                     TextField("Server", text: $url, prompt: Text("https://timetagger.example.com"))
                     TextField("Username", text: $username)
                         .textContentType(.username)
@@ -354,7 +426,7 @@ struct SettingsView: View {
                     LabeledContent("Signed in as", value: store.username.isEmpty ? "—" : store.username)
                     HStack {
                         Spacer()
-                        Button("Sign Out") { store.signOut() }
+                        Button("Sign Out") { Task { await store.signOut() } }
                     }
                 }
             }
@@ -365,6 +437,7 @@ struct SettingsView: View {
                 Toggle("Show work time next to local time", isOn: $store.showWorkTime)
                 Toggle("Pause the running task while the Mac sleeps", isOn: $store.pauseOnSleep)
             }
+            if store.signedIn { AccessSection() }
             Section("Reminders") {
                 Toggle("Remind me when nothing is tracked", isOn: $store.remindIdle)
                 if store.remindIdle {
