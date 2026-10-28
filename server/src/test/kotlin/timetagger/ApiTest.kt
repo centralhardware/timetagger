@@ -75,7 +75,7 @@ class ApiTest {
     }
 
     private fun api(block: suspend ApplicationTestBuilder.() -> Unit) = testApplication {
-        application { module(Config(jwtKey = "test-key"), db) }
+        application { module(Config(jwtKey = "test-key", autoMerge = false), db) }
         block()
     }
 
@@ -179,7 +179,7 @@ class ApiTest {
     /** Over a real server: the test engine holds a streamed response back until it ends. */
     @Test
     fun changeStream() {
-        val server = embeddedServer(CIO, port = 0) { module(Config(jwtKey = "test-key"), db) }.start()
+        val server = embeddedServer(CIO, port = 0) { module(Config(jwtKey = "test-key", autoMerge = false), db) }.start()
         try {
             val base = runBlocking { "http://localhost:${server.engine.resolvedConnectors().first().port}$API" }
             val http = java.net.http.HttpClient.newHttpClient()

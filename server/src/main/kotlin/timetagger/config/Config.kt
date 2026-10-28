@@ -14,6 +14,12 @@ data class Config(
     val logLevel: String = "info",
     /** A second path the API is served under, besides the root; always starts and ends with '/'. */
     val pathPrefix: String = "/timetagger/",
+    /** Fold back-to-back records of the same task into one after every write. */
+    val autoMerge: Boolean = true,
+    /** The largest gap between two records that still merge. */
+    val mergeGapSeconds: Long = 60,
+    /** A tag set aside when comparing descriptions, kept on the merged record (empty for none). */
+    val mergeIgnoreTag: String = "finished",
 ) {
     val host: String get() = bind.substringBeforeLast(":")
     val port: Int get() = bind.substringAfterLast(":").toInt()
@@ -37,6 +43,9 @@ data class Config(
                 jwtKey = value("jwt_key") ?: d.jwtKey,
                 logLevel = value("log_level") ?: d.logLevel,
                 pathPrefix = value("path_prefix")?.let { toPathPrefix(it) } ?: d.pathPrefix,
+                autoMerge = value("auto_merge")?.toBooleanStrictOrNull() ?: d.autoMerge,
+                mergeGapSeconds = value("merge_gap_seconds")?.toLongOrNull() ?: d.mergeGapSeconds,
+                mergeIgnoreTag = value("merge_ignore_tag")?.trimStart('#') ?: d.mergeIgnoreTag,
             )
         }
 
