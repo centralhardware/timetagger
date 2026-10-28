@@ -13,6 +13,10 @@ struct TimeTaggerBarApp: App {
         }
         .menuBarExtraStyle(.window)
 
+        Window("History", id: "history") {
+            HistoryView().environmentObject(store)
+        }
+
         Window("Report", id: "report") {
             ReportView().environmentObject(store)
         }

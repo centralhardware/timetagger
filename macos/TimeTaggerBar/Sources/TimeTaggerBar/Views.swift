@@ -45,6 +45,10 @@ struct MenuView: View {
                 Text("Today").foregroundStyle(.secondary)
                 Text(Store.format(store.todayTotal, seconds: false)).bold().monospacedDigit()
                 Spacer()
+                Button("History") {
+                    openWindow(id: "history")
+                    NSApp.activate(ignoringOtherApps: true)
+                }
                 Button("Report") {
                     openWindow(id: "report")
                     NSApp.activate(ignoringOtherApps: true)
@@ -190,7 +194,7 @@ struct EditRecordView: View {
         .onAppear {
             start = Date(timeIntervalSince1970: TimeInterval(record.t1))
             end = Date(timeIntervalSince1970: TimeInterval(record.t2))
-            running = record.isRunning && store.records.contains(record)
+            running = record.isRunning
         }
         .toolbar {
             ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
@@ -377,6 +381,105 @@ struct ReportView: View {
         do {
             let recs = try await store.api.records(from: t1, to: t2).filter { !$0.isDeleted }
             rows = builder.rows(recs, from: t1, to: t2)
+        } catch {
+            store.error = error.localizedDescription
+        }
+    }
+}
+
+struct HistoryView: View {
+    @EnvironmentObject var store: Store
+    @State private var from = Calendar.current.date(byAdding: .day, value: -6, to: Calendar.current.startOfDay(for: Date()))!
+    @State private var to = Date()
+    @State private var search = ""
+    @State private var records: [Record] = []
+    @State private var editing: Record?
+
+    private struct Day: Identifiable {
+        let id: Date
+        let records: [Record]
+    }
+
+    private var days: [Day] {
+        let q = search.lowercased()
+        let shown = records.filter { q.isEmpty || $0.ds.lowercased().contains(q) }
+        let groups = Dictionary(grouping: shown) { Calendar.current.startOfDay(for: Date(timeIntervalSince1970: TimeInterval($0.t1))) }
+        return groups.keys.sorted(by: >).map { Day(id: $0, records: groups[$0]!.sorted { $0.t1 > $1.t1 }) }
+    }
+
+    var body: some View {
+        List {
+            ForEach(days) { day in
+                Section {
+                    ForEach(day.records) { r in
+                        row(r)
+                            .contentShape(Rectangle())
+                            .onTapGesture(count: 2) { editing = r }
+                            .contextMenu {
+                                Button("Edit…") { editing = r }
+                                Button("Resume") { Task { await store.start(r.ds) } }
+                                if r.isRunning { Button("Stop") { Task { await store.stop(r) } } }
+                                Divider()
+                                Button("Delete", role: .destructive) { Task { await store.delete(r) } }
+                            }
+                    }
+                } header: {
+                    HStack {
+                        Text(day.id, format: .dateTime.weekday(.wide).day().month(.wide))
+                        Spacer()
+                        Text(Store.format(day.records.reduce(0) { $0 + $1.duration(now: store.now) }, seconds: false))
+                            .monospacedDigit()
+                    }
+                }
+            }
+        }
+        .overlay {
+            if days.isEmpty { Text("No records").foregroundStyle(.secondary) }
+        }
+        .searchable(text: $search, prompt: "Search description or #tag")
+        .toolbar {
+            ToolbarItemGroup {
+                DatePicker("From", selection: $from, displayedComponents: .date)
+                DatePicker("To", selection: $to, displayedComponents: .date)
+                Button {
+                    let t = Int(Date().timeIntervalSince1970)
+                    editing = Record(key: Record.newKey(), mt: t, t1: t - 3600, t2: t, ds: "", deleted: 0)
+                } label: { Label("Add record", systemImage: "plus") }
+            }
+        }
+        .navigationTitle("History")
+        .frame(minWidth: 620, minHeight: 480)
+        .sheet(item: $editing) { r in
+            EditRecordView(record: r).environmentObject(store)
+        }
+        .task(id: "\(from)-\(to)-\(store.revision)") { await load() }
+    }
+
+    private func row(_ r: Record) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(store.clock(r.t1) + "–" + (r.isRunning ? "now" : store.clock(r.t2)))
+                if store.showsWorkZone {
+                    Text(store.clock(r.t1, work: true) + "–" + (r.isRunning ? "now" : store.clock(r.t2, work: true)) + " " + store.workZoneName)
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .monospacedDigit()
+            .frame(width: 150, alignment: .leading)
+            Text(r.ds.isEmpty ? "(no description)" : r.ds).lineLimit(2)
+            Spacer()
+            if r.isRunning { Image(systemName: "circle.fill").foregroundStyle(.red).font(.caption2) }
+            Text(Store.format(r.duration(now: store.now), seconds: false)).monospacedDigit()
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func load() async {
+        let cal = Calendar.current
+        let t1 = Int(cal.startOfDay(for: from).timeIntervalSince1970)
+        let t2 = Int(cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: to))!.timeIntervalSince1970)
+        do {
+            records = try await store.api.records(from: t1, to: t2).filter { !$0.isDeleted }
         } catch {
             store.error = error.localizedDescription
         }

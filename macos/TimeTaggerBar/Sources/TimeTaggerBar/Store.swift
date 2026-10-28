@@ -44,6 +44,8 @@ final class Store: ObservableObject {
     @Published var recent: [String] = []
     @Published var error: String?
     @Published var lately: [Record] = []
+    /// Bumped after every write, so open windows know to reload.
+    @Published var revision = 0
     private var recentDurations: [String: Int] = [:]
     @Published var now = Int(Date().timeIntervalSince1970)
 
@@ -186,6 +188,7 @@ final class Store: ObservableObject {
         let mt = Int(Date().timeIntervalSince1970)
         do {
             try await api.put(recs.map { var r = $0; r.mt = mt; return r })
+            revision += 1
             await refresh()
         } catch {
             self.error = error.localizedDescription
