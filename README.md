@@ -11,7 +11,7 @@ This fork has two parts:
   running task while the Mac sleeps. Download the DMG from
   [Releases](https://github.com/centralhardware/timetagger/releases).
 * **`server`**: the API server, in Kotlin with [Ktor](https://ktor.io). It stores everything in
-  PostgreSQL, including the login credentials, and serves a REST API at `<prefix>api/v1/`.
+  PostgreSQL, including the login credentials, and serves a REST API at `/api/v1/` (and `<prefix>api/v1/`).
 
 The web app is gone: the menu bar app is the client.
 
@@ -70,7 +70,7 @@ Set with `TIMETAGGER_<NAME>` environment variables or `--<name>=<value>` argumen
 | `db_uri` | (required) | `postgresql://user:pass@host:5432/db` |
 | `jwt_key` | ephemeral | token signing secret; without it sessions end on restart |
 | `log_level` | `info` | |
-| `path_prefix` | `/timetagger/` | |
+| `path_prefix` | `/timetagger/` | served there as well as at the root |
 
 
 ## API (v1)

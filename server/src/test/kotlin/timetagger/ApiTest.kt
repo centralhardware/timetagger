@@ -102,6 +102,9 @@ class ApiTest {
         assertEquals(HttpStatusCode.OK, client.get("$API/me") { header("Authorization", "Bearer $web") }.status)
         assertEquals(HttpStatusCode.OK, client.get("$API/version").status)
         assertEquals("ok", client.get("/timetagger/status").bodyAsText())
+        // The bare domain works as the base URL too.
+        assertEquals("ok", client.get("/status").bodyAsText())
+        assertEquals("alice", client.get("/api/v1/me") { header("Authorization", "Bearer $web") }.obj()["username"]!!.jsonPrimitive.content)
         assertEquals("not_found", client.get("$API/nope") { header("Authorization", "Bearer $web") }.obj()["error"]!!.jsonPrimitive.content)
     }
 
