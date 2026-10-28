@@ -12,10 +12,7 @@ import io.ktor.server.auth.principal
 import timetagger.auth.AuthInfo
 import org.slf4j.event.Level
 import io.ktor.server.auth.Authentication
-import io.ktor.server.auth.UserIdPrincipal
 import io.ktor.server.auth.authenticate
-import io.ktor.server.auth.basic
-import io.ktor.server.auth.jwt.jwt
 import io.ktor.server.plugins.BadRequestException
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.statuspages.StatusPages
@@ -29,9 +26,14 @@ import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import org.slf4j.LoggerFactory
 import kotlin.coroutines.cancellation.CancellationException
-import timetagger.auth.JwtCodec
+import timetagger.auth.AccessTokens
+import timetagger.auth.AuthService
 import timetagger.auth.PasswordService
-import timetagger.auth.TokenService
+import timetagger.db.ApiKeyRepository
+import timetagger.db.RefreshTokenRepository
+import timetagger.routes.accountRoutes
+import timetagger.routes.authRoutes
+import io.ktor.server.auth.bearer
 import timetagger.config.Config
 import timetagger.db.Database
 import timetagger.db.RecordRepository
@@ -41,10 +43,8 @@ import timetagger.model.ApiJson
 import timetagger.model.ErrorResponse
 import timetagger.model.VersionResponse
 import timetagger.routes.recordRoutes
-import timetagger.routes.sessionRoutes
 import timetagger.routes.settingRoutes
 import timetagger.routes.syncRoutes
-import timetagger.routes.tokenRoutes
 import timetagger.service.RecordService
 import timetagger.service.SettingService
 import timetagger.service.SyncService
@@ -53,8 +53,7 @@ import java.time.Duration
 
 private val log = LoggerFactory.getLogger("timetagger.api")
 
-private const val LOGIN = "login"
-private const val TOKEN = "token"
+private const val BEARER = "bearer"
 
 /** Everything the routes need, wired once per application. */
 class Services(db: Database, config: Config) {
@@ -62,8 +61,7 @@ class Services(db: Database, config: Config) {
     private val recordRepo = RecordRepository()
     private val settingRepo = SettingRepository()
     val passwords = PasswordService(db, users)
-    val jwt = JwtCodec(config.jwtKey)
-    val tokens = TokenService(jwt, db, users)
+    val auth = AuthService(db, users, passwords, AccessTokens(config.jwtKey), RefreshTokenRepository(), ApiKeyRepository())
     val records = RecordService(db, recordRepo)
     val settings = SettingService(db, settingRepo)
     val sync = SyncService(db, recordRepo, settingRepo)
@@ -87,19 +85,13 @@ fun Application.module(config: Config, db: Database) {
         logger = LoggerFactory.getLogger("timetagger.http")
         filter { !it.request.path().endsWith("/status") }
         format { call ->
-            val user = call.principal<AuthInfo>()?.username ?: call.principal<UserIdPrincipal>()?.name ?: "-"
+            val user = call.principal<AuthInfo>()?.username ?: "-"
             "${call.request.httpMethod.value} ${call.request.path()} ${call.response.status()?.value ?: "-"} $user ${call.processingTimeMillis()}ms"
         }
     }
     install(Authentication) {
-        basic(LOGIN) {
-            realm = "TimeTagger"
-            validate { c -> UserIdPrincipal(c.name.trim()).takeIf { services.passwords.verify(c.name, c.password) } }
-        }
-        jwt(TOKEN) {
-            verifier(services.jwt.verifier)
-            validate { services.tokens.validate(it.payload) }
-            challenge { _, _ -> call.error(HttpStatusCode.Unauthorized, "unauthorized", "missing, invalid, expired or revoked bearer token") }
+        bearer(BEARER) {
+            authenticate { services.auth.authenticate(it.token) }
         }
     }
     install(StatusPages) {
@@ -118,6 +110,10 @@ fun Application.module(config: Config, db: Database) {
             log.error("Unhandled error on {} {}", call.request.httpMethod.value, call.request.path(), e)
             call.error(HttpStatusCode.InternalServerError, "internal", "internal server error")
         }
+        // The bearer provider answers a missing or bad credential with a bare 401.
+        status(HttpStatusCode.Unauthorized) { call, _ ->
+            call.error(HttpStatusCode.Unauthorized, "unauthorized", "missing, invalid or expired access token or API key")
+        }
         status(HttpStatusCode.NotFound) { call, _ -> call.error(HttpStatusCode.NotFound, "not_found", "no such endpoint: ${call.request.path()}") }
         status(HttpStatusCode.MethodNotAllowed) { call, _ ->
             call.error(HttpStatusCode.MethodNotAllowed, "method_not_allowed", "${call.request.httpMethod.value} is not allowed on ${call.request.path()}")
@@ -134,9 +130,9 @@ private fun Route.api(services: Services) {
     get("status") { call.respondText("ok") }
     route("api/v1") {
         get("version") { call.respond(VersionResponse(version())) }
-        authenticate(LOGIN) { sessionRoutes(services.tokens) }
-        authenticate(TOKEN) {
-            tokenRoutes(services.tokens)
+        authRoutes(services.auth)
+        authenticate(BEARER) {
+            accountRoutes(services.auth)
             recordRoutes(services.records)
             settingRoutes(services.settings)
             syncRoutes(services.sync)

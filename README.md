@@ -43,12 +43,14 @@ Or use the Docker image `ghcr.io/centralhardware/timetagger` with
 
 `server/src/main/kotlin/timetagger/`:
 
-* `routes/`: mounted in `Application.kt` (`sessionRoutes`, `tokenRoutes`, `recordRoutes`,
+* `routes/`: mounted in `Application.kt` (`authRoutes`, `accountRoutes`, `recordRoutes`,
   `settingRoutes`, `syncRoutes`)
 * `service/`: `RecordService`, `SettingService` (validation, newest edit wins) and `SyncService`
   (changes since a revision)
-* `auth/`: tokens (`JwtCodec`, `TokenService`) and passwords. Ktor's `basic` provider checks the
-  login and its `jwt` provider the bearer token; only the revocation (seed) check is ours
+* `auth/`: passwords, `AccessTokens` (15-minute HS256 JWTs, never stored) and `AuthService`
+  (login, refresh-token rotation, API keys). Ktor's `bearer` provider hands every credential to
+  `AuthService.authenticate`: a `tt_` API key is looked up by its hash, anything else is
+  verified as a JWT
 * `db/`: the connection pool (`Database`), Flyway migrations in `resources/db/migration`, and one
   [kotliquery](https://github.com/seratch/kotliquery) repository per table
 * `model/`: the `@Serializable` records, settings, inputs and responses
@@ -68,7 +70,7 @@ Set with `TIMETAGGER_<NAME>` environment variables or `--<name>=<value>` argumen
 |---|---|---|
 | `bind` | `127.0.0.1:8080` | address and port |
 | `db_uri` | (required) | `postgresql://user:pass@host:5432/db` |
-| `jwt_key` | ephemeral | token signing secret; without it sessions end on restart |
+| `jwt_key` | ephemeral | access-token signing secret; without it access tokens die on restart (clients refresh) |
 | `log_level` | `info` | |
 | `path_prefix` | `/timetagger/` | served there as well as at the root |
 | `auto_merge` | `true` | after every write, fold back-to-back records of one task into one |
@@ -80,13 +82,20 @@ Set with `TIMETAGGER_<NAME>` environment variables or `--<name>=<value>` argumen
 
 Served at `<prefix>api/v1/`. JSON in and out, times in ISO-8601. Errors are
 `{"error": "<code>", "message": "..."}` with 401, 403, 404, 405, 409 or 422.
-Everything except `version` and `sessions` needs `Authorization: Bearer <token>`.
+Everything except `version` and `auth/login|refresh|logout` needs `Authorization: Bearer <access token or API key>`.
+
+A login returns a 15-minute access token (JWT) and a 30-day refresh token. A refresh retires
+its refresh token and returns a new pair; presenting a retired one again ends that whole
+session, since only a copy could still have it. Refresh tokens and API keys are stored as
+SHA-256 hashes. A new password ends every session.
 
 | | |
 |---|---|
-| `POST sessions` | HTTP Basic login → `{token, expiresAt}`, a web token valid for 14 days |
-| `POST tokens` | (web token) → a long-lived API token |
-| `DELETE tokens/{web\|api}` | revokes every token of that kind |
+| `POST auth/login` | `{username, password}` → `{accessToken, accessExpiresAt, refreshToken, refreshExpiresAt}` |
+| `POST auth/refresh` | `{refreshToken}` → a new pair |
+| `POST auth/logout` | `{refreshToken}` ends that session |
+| `GET auth/sessions`, `DELETE auth/sessions/{id}` | (access token) signed-in devices, and signing one out |
+| `GET api-keys`, `POST api-keys {name}`, `DELETE api-keys/{id}` | (access token) keys for scripts; `POST` shows the `tt_…` key once |
 | `GET me` | the signed-in user |
 | `GET records/tags` | tags in use, most recently used first |
 | `GET records?from=&to=[&tag=a&tag=b][&running=][&deleted=][&q=]` | records overlapping the range; `q` searches descriptions (from/to optional then) |
