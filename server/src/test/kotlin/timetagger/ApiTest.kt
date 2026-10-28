@@ -138,6 +138,10 @@ class ApiTest {
         assertEquals(listOf(b), list("$day&tag=x&tag=work"))
         // Tags in use, the latest first; b started after a.
         assertEquals(listOf("work", "x"), client.get("$API/records/tags") { header("Authorization", "Bearer $t") }.obj()["tags"]!!.jsonArray.map { it.jsonPrimitive.content })
+        // Search needs no range and matches any part of the description, case aside; % is literal.
+        assertEquals(listOf(a), list("q=CODE"))
+        assertEquals(listOf(a, b), list("q=%23work"))
+        assertEquals(emptyList(), list("q=%25"))
         // A running record overlaps any later range.
         assertEquals(listOf(b), list("from=2026-11-01T00:00:00Z&to=2026-11-02T00:00:00Z"))
         assertEquals(HttpStatusCode.UnprocessableEntity, client.get("$API/records?from=yesterday&to=now") { header("Authorization", "Bearer $t") }.status)
@@ -251,6 +255,23 @@ class ApiTest {
         } finally {
             logger.detachAppender(appender)
         }
+    }
+
+    @Test
+    fun startingARecordStopsTheRunningOne() = api {
+        val t = token()
+        suspend fun create(body: String) = client.post("$API/records") {
+            header("Authorization", "Bearer $t"); contentType(ContentType.Application.Json); setBody(body)
+        }.obj()
+        val first = create("""{"start":"2026-10-28T08:00:00Z","description":"first"}""")["id"]!!.jsonPrimitive.long
+        create("""{"start":"2026-10-28T09:00:00Z","description":"second"}""")
+        val stopped = client.get("$API/records/$first") { header("Authorization", "Bearer $t") }.obj()
+        assertEquals("2026-10-28T09:00:00Z", stopped["stop"]!!.jsonPrimitive.content)
+        // A closed record doesn't stop anything.
+        create("""{"start":"2026-10-28T07:00:00Z","stop":"2026-10-28T07:30:00Z","description":"earlier"}""")
+        val running = client.get("$API/records?from=2026-10-28T00:00:00Z&to=2026-10-29T00:00:00Z&running=true") { header("Authorization", "Bearer $t") }
+            .obj()["records"]!!.jsonArray.map { it.jsonObject["description"]!!.jsonPrimitive.content }
+        assertEquals(listOf("second"), running)
     }
 
     @Test

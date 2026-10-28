@@ -14,6 +14,8 @@ data class RecordFilter(
     /** Every tag must be on the record. */
     val tags: List<String> = emptyList(),
     val running: Boolean? = null,
+    /** Case-insensitive substring of the description. */
+    val text: String? = null,
     val deleted: Boolean = false,
 )
 
@@ -41,6 +43,10 @@ class RecordRepository {
         f.tags.forEachIndexed { i, tag ->
             where += "EXISTS (SELECT 1 FROM record_tags t WHERE t.record_id = r.id AND t.tag = :tag$i)"
             params["tag$i"] = tag.removePrefix("#").lowercase()
+        }
+        f.text?.let {
+            where += "r.description ILIKE :text ESCAPE '\\'"
+            params["text"] = "%" + it.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
         }
         f.running?.let { where += if (it) "r.stop_at IS NULL" else "r.stop_at IS NOT NULL" }
         where += if (f.deleted) "r.deleted_at IS NOT NULL" else "r.deleted_at IS NULL"
