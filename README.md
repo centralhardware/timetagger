@@ -22,18 +22,19 @@ The web app is gone: the menu bar app is the client.
 
 ```
 cd server
-./gradlew fatJar
+./gradlew installDist
 export TIMETAGGER_DB_URI='postgresql://user:pass@localhost:5432/timetagger'
 export TIMETAGGER_JWT_KEY='a-long-random-secret'
-java -jar build/libs/timetagger.jar
+build/install/timetagger/bin/timetagger
 ```
 
-Pending migrations are applied on startup. Manage logins with:
+Pending Flyway migrations are applied on startup. A database from the Python server is adopted as
+version 4. Manage logins with:
 
 ```
-java -jar timetagger.jar user-add <username> <password>
-java -jar timetagger.jar user-list
-java -jar timetagger.jar user-remove <username>
+timetagger user-add <username> <password>
+timetagger user-list
+timetagger user-remove <username>
 ```
 
 Or use the Docker image `ghcr.io/centralhardware/timetagger` with
@@ -50,7 +51,8 @@ Or use the Docker image `ghcr.io/centralhardware/timetagger` with
   (newest `mt` wins, strictly increasing server times, reset handling)
 * `auth/`: tokens (`JwtCodec`, `TokenService`) and passwords. Ktor's `basic` provider checks the
   login and its `jwt` provider checks the `authtoken` header; only the seed/expiry check is ours
-* `db/`: the connection pool and migrations (`Database`) and one repository per table
+* `db/`: the connection pool (`Database`), Flyway migrations in `resources/db/migration`, and one
+  [kotliquery](https://github.com/seratch/kotliquery) repository per table
 * `model/`: the `@Serializable` items and responses, and the lenient item parser
 * errors are `ApiException`s, which `StatusPages` turns into plain-text responses
 

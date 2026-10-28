@@ -3,9 +3,9 @@
 # TimeTagger stores all user data in PostgreSQL. Login credentials are also
 # stored in the database; manage them with:
 #
-#   docker compose exec timetagger java -jar /opt/timetagger/timetagger.jar user-add <name> <pw>
-#   docker compose exec timetagger java -jar /opt/timetagger/timetagger.jar user-list
-#   docker compose exec timetagger java -jar /opt/timetagger/timetagger.jar user-remove <name>
+#   docker compose exec timetagger timetagger user-add <name> <pw>
+#   docker compose exec timetagger timetagger user-list
+#   docker compose exec timetagger timetagger user-remove <name>
 #
 # Set TIMETAGGER_JWT_KEY to a long random secret so the deployment is fully
 # stateless (no volume needed for TimeTagger itself).

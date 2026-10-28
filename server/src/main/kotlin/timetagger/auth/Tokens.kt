@@ -78,11 +78,11 @@ class TokenService(private val codec: JwtCodec, private val db: Database, privat
         return info.takeIf { seed(it.username, kind, false) == it.seed && it.expires >= now() }
     }
 
-    private suspend fun seed(username: String, kind: TokenKind, reset: Boolean): String = db.tx { conn ->
+    private suspend fun seed(username: String, kind: TokenKind, reset: Boolean): String = db.tx { session ->
         val key = "${kind.id}_seed"
-        val current = userInfo.get(conn, username, key)?.jsonPrimitive?.contentOrNull.orEmpty()
+        val current = userInfo.get(session, username, key)?.jsonPrimitive?.contentOrNull.orEmpty()
         if (!reset && current.isNotEmpty()) current
-        else randomToken(8).also { userInfo.put(conn, username, key, JsonPrimitive(it), now()) }
+        else randomToken(8).also { userInfo.put(session, username, key, JsonPrimitive(it), now()) }
     }
 
     companion object {

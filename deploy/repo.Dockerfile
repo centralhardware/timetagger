@@ -5,11 +5,13 @@
 FROM eclipse-temurin:25-jdk AS build
 WORKDIR /src
 COPY server /src
-RUN ./gradlew --no-daemon -q fatJar
+RUN ./gradlew --no-daemon -q installDist
 
 FROM eclipse-temurin:25-jre
-RUN groupadd -g 1000 timetagger && useradd -r -u 1000 -m -g timetagger timetagger
-COPY --from=build /src/build/libs/timetagger.jar /opt/timetagger/timetagger.jar
+# Ubuntu-based images ship a user "ubuntu" with UID 1000; replace it.
+RUN (userdel -r ubuntu 2>/dev/null || true) && groupadd -g 1000 timetagger && useradd -r -u 1000 -m -g timetagger timetagger
+COPY --from=build /src/build/install/timetagger /opt/timetagger
 USER 1000
 WORKDIR /opt/timetagger
-ENTRYPOINT ["java", "-jar", "/opt/timetagger/timetagger.jar"]
+ENV PATH="/opt/timetagger/bin:$PATH"
+ENTRYPOINT ["timetagger"]

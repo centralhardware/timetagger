@@ -19,5 +19,5 @@ jobs:
           java-version: 25
       - uses: gradle/actions/setup-gradle@v5
       # The API tests start an embedded PostgreSQL, so no service container is needed.
-      - run: ./gradlew --no-daemon test fatJar
+      - run: ./gradlew --no-daemon test installDist
         working-directory: server

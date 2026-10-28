@@ -1,6 +1,6 @@
 plugins {
-    kotlin("jvm") version "2.3.21"
-    kotlin("plugin.serialization") version "2.3.21"
+    kotlin("jvm") version "2.4.21"
+    kotlin("plugin.serialization") version "2.4.21"
     application
 }
 
@@ -9,7 +9,7 @@ version = "27.0.0"
 
 repositories { mavenCentral() }
 
-val ktorVersion = "3.5.1"
+val ktorVersion = "3.6.0"
 
 dependencies {
     implementation("io.ktor:ktor-server-core:$ktorVersion")
@@ -19,8 +19,11 @@ dependencies {
     implementation("io.ktor:ktor-server-auth:$ktorVersion")
     implementation("io.ktor:ktor-server-auth-jwt:$ktorVersion")
     implementation("io.ktor:ktor-server-status-pages:$ktorVersion")
-    implementation("org.postgresql:postgresql:42.7.8")
-    implementation("com.zaxxer:HikariCP:7.0.2")
+    implementation("org.postgresql:postgresql:42.7.14")
+    implementation("com.zaxxer:HikariCP:7.1.0")
+    implementation("com.github.seratch:kotliquery:1.9.1")
+    implementation("org.flywaydb:flyway-core:13.11.1")
+    implementation("org.flywaydb:flyway-database-postgresql:13.11.1")
     implementation("at.favre.lib:bcrypt:0.10.2")
     implementation("ch.qos.logback:logback-classic:1.5.20")
 
@@ -43,13 +46,4 @@ tasks.test {
     useJUnitPlatform()
 }
 
-tasks.register<Jar>("fatJar") {
-    archiveFileName.set("timetagger.jar")
-    manifest { attributes["Main-Class"] = "timetagger.MainKt" }
-    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
-    from(sourceSets.main.get().output)
-    dependsOn(configurations.runtimeClasspath)
-    from({ configurations.runtimeClasspath.get().filter { it.name.endsWith("jar") }.map { zipTree(it) } }) {
-        exclude("META-INF/*.SF", "META-INF/*.DSA", "META-INF/*.RSA")
-    }
-}
+application { applicationName = "timetagger" }

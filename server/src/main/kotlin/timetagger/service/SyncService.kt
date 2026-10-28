@@ -17,7 +17,7 @@ import timetagger.model.Record
 import timetagger.model.Setting
 import timetagger.model.UpdatesResponse
 import timetagger.now
-import java.sql.Connection
+import kotliquery.Session
 
 /**
  * Reads and writes a user's records and settings, and implements the sync
@@ -36,15 +36,15 @@ class SyncService(
 
     suspend fun updates(user: String, since: Double): UpdatesResponse {
         val serverTime = now()
-        return db.io { conn ->
+        return db.io { session ->
             // Fast path, which is what happens most of the time.
-            if (userInfo.lastWrite(conn, user) + 0.2 < since) {
+            if (userInfo.lastWrite(session, user) + 0.2 < since) {
                 return@io UpdatesResponse(serverTime, JsonPrimitive(0), emptyList(), emptyList())
             }
             // The client must start over when the data was reset after `since`.
-            val reset = since <= resetTime(conn, user)
+            val reset = since <= resetTime(session, user)
             val from = if (reset) null else since
-            UpdatesResponse(serverTime, JsonPrimitive(reset), records.changedSince(conn, user, from), settings.changedSince(conn, user, from))
+            UpdatesResponse(serverTime, JsonPrimitive(reset), records.changedSince(session, user, from), settings.changedSince(session, user, from))
         }
     }
 
@@ -52,13 +52,13 @@ class SyncService(
     suspend fun forceReset(user: String) = db.tx { userInfo.put(it, user, "reset_time", JsonPrimitive(now()), now()) }
 
     suspend fun pushRecords(user: String, items: JsonArray) =
-        push(user, items, ItemParser::record, Record::mt, Record::st, { conn, key -> records.get(conn, user, key) }) { conn, r, st ->
-            records.upsert(conn, user, r.copy(st = st))
+        push(user, items, ItemParser::record, Record::mt, Record::st, { session, key -> records.get(session, user, key) }) { session, r, st ->
+            records.upsert(session, user, r.copy(st = st))
         }
 
     suspend fun pushSettings(user: String, items: JsonArray) =
-        push(user, items, ItemParser::setting, Setting::mt, Setting::st, { conn, key -> settings.get(conn, user, key) }) { conn, s, st ->
-            settings.upsert(conn, user, s.copy(st = st))
+        push(user, items, ItemParser::setting, Setting::mt, Setting::st, { session, key -> settings.get(session, user, key) }) { session, s, st ->
+            settings.upsert(session, user, s.copy(st = st))
         }
 
     /**
@@ -71,23 +71,23 @@ class SyncService(
         parse: (JsonObject) -> T,
         mt: (T) -> Long,
         st: (T) -> Double?,
-        current: (Connection, String) -> T?,
-        store: (Connection, T, Double) -> Unit,
+        current: (Session, String) -> T?,
+        store: (Session, T, Double) -> Unit,
     ): PushResponse {
         val serverTime = now()
         val accepted = mutableListOf<String>()
         val failed = mutableListOf<String>()
         val errors = mutableListOf<String>()
         var keyless = 0
-        db.tx { conn ->
-            val resetTime = resetTime(conn, user)
+        db.tx { session ->
+            val resetTime = resetTime(session, user)
             for (raw in items) {
                 val key = ItemParser.key(raw)
                 if (key == null) {
                     keyless++
                     continue
                 }
-                val cur = current(conn, key)
+                val cur = current(session, key)
                 val item = try {
                     parse(raw as JsonObject).also {
                         if (mt(it) < resetTime) throw InvalidItem("Item was modified after a reset")
@@ -99,14 +99,14 @@ class SyncService(
                     cur ?: continue
                 }
                 val winner = if (cur != null && mt(cur) > mt(item)) cur else item
-                store(conn, winner, stamp(serverTime, cur?.let(st)))
+                store(session, winner, stamp(serverTime, cur?.let(st)))
             }
         }
         return PushResponse(accepted, failed, errors + List(keyless) { "Got item that is not a dict with str 'key' field." })
     }
 
-    private fun resetTime(conn: Connection, user: String): Double =
-        userInfo.get(conn, user, "reset_time")?.jsonPrimitive?.doubleOrNull ?: -1.0
+    private fun resetTime(session: Session, user: String): Double =
+        userInfo.get(session, user, "reset_time")?.jsonPrimitive?.doubleOrNull ?: -1.0
 
     private fun stamp(serverTime: Double, current: Double?) =
         if (current == null) serverTime else maxOf(serverTime, current + 0.0001)

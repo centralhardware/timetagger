@@ -142,14 +142,35 @@ class ApiTest {
 
     @Test
     fun verifiesPasswordsHashedByThePythonServer() = runBlocking {
-        db.io { conn ->
-            conn.createStatement().use {
-                it.execute(
-                    "INSERT INTO credentials (username, pw_hash, modified_time) VALUES " +
-                        "('py', '\$2b\$12\$6wamkYM992RYyml95emmjeW8uFNBxiNV5xrHemIjuZJdVyOM6j0Zm', 0)",
-                )
-            }
+        db.io { session ->
+            CredentialRepository().upsert(session, "py", "\$2b\$12\$6wamkYM992RYyml95emmjeW8uFNBxiNV5xrHemIjuZJdVyOM6j0Zm", 0.0)
         }
         assertTrue(PasswordService(db, CredentialRepository()).verify("py", "secret"))
+    }
+}
+
+/** A database left by the Python server is adopted by Flyway, not migrated again. */
+class PythonDatabaseMigrationTest {
+    @Test
+    fun baselinesAtVersionFour() {
+        EmbeddedPostgres.start().use { pg ->
+            pg.postgresDatabase.connection.use { c ->
+                c.createStatement().use { st ->
+                    // What the Python server's own runner left behind after migrations 1–4.
+                    for (v in 1..4) {
+                        val name = listOf("V1__init.sql", "V2__drop_ob_and_add_deleted.sql", "V3__rename_columns.sql", "V4__records_mt_bigint.sql")[v - 1]
+                        st.execute(Database.resource("db/migration/$name"))
+                    }
+                    st.execute("CREATE TABLE schema_migrations (version integer PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())")
+                    st.execute("INSERT INTO schema_migrations VALUES (1), (2), (3), (4)")
+                    st.execute("INSERT INTO credentials (username, pw_hash) VALUES ('keep', 'x')")
+                }
+            }
+            Database("postgresql://postgres:postgres@localhost:${pg.port}/postgres").use { db ->
+                db.migrate()
+                db.migrate()
+                assertEquals(listOf("keep"), runBlocking { PasswordService(db, CredentialRepository()).list() })
+            }
+        }
     }
 }
