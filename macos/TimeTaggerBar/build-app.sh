@@ -2,8 +2,8 @@
 # Builds TimeTaggerBar.app (a menu-bar-only app) into ./build.
 set -e
 cd "$(dirname "$0")"
-swift build -c release --arch arm64 --arch x86_64
-BIN=$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)/TimeTaggerBar
+swift build -c release --arch arm64
+BIN=$(swift build -c release --arch arm64 --show-bin-path)/TimeTaggerBar
 APP=build/TimeTaggerBar.app
 rm -rf "$APP" && mkdir -p "$APP/Contents/MacOS"
 cp "$BIN" "$APP/Contents/MacOS/"
