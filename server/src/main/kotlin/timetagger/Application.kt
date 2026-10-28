@@ -47,6 +47,8 @@ import timetagger.routes.tokenRoutes
 import timetagger.service.RecordService
 import timetagger.service.SettingService
 import timetagger.service.SyncService
+import timetagger.service.MergeService
+import java.time.Duration
 
 private val log = LoggerFactory.getLogger("timetagger.api")
 
@@ -54,16 +56,17 @@ private const val LOGIN = "login"
 private const val TOKEN = "token"
 
 /** Everything the routes need, wired once per application. */
-class Services(db: Database, jwtKey: String) {
+class Services(db: Database, config: Config) {
     private val users = UserRepository()
     private val recordRepo = RecordRepository()
     private val settingRepo = SettingRepository()
     val passwords = PasswordService(db, users)
-    val jwt = JwtCodec(jwtKey)
+    val jwt = JwtCodec(config.jwtKey)
     val tokens = TokenService(jwt, db, users)
     val records = RecordService(db, recordRepo)
     val settings = SettingService(db, settingRepo)
     val sync = SyncService(db, recordRepo, settingRepo)
+    val merge = MergeService(db, recordRepo, Duration.ofSeconds(config.mergeGapSeconds), config.mergeIgnoreTag.ifBlank { null })
 }
 
 fun version(): String = Database.resource("version.txt").trim()
@@ -72,7 +75,8 @@ private suspend fun ApplicationCall.error(status: HttpStatusCode, code: String, 
     respond(status, ErrorResponse(code, message))
 
 fun Application.module(config: Config, db: Database) {
-    val services = Services(db, config.jwtKey)
+    val services = Services(db, config)
+    if (config.autoMerge) services.merge.start(this)
 
     install(ContentNegotiation) { json(ApiJson) }
     install(SSE)

@@ -71,6 +71,9 @@ Set with `TIMETAGGER_<NAME>` environment variables or `--<name>=<value>` argumen
 | `jwt_key` | ephemeral | token signing secret; without it sessions end on restart |
 | `log_level` | `info` | |
 | `path_prefix` | `/timetagger/` | served there as well as at the root |
+| `auto_merge` | `true` | after every write, fold back-to-back records of one task into one |
+| `merge_gap_seconds` | `60` | the largest gap that still merges |
+| `merge_ignore_tag` | `finished` | set aside when comparing descriptions, kept on the merged record |
 
 
 ## API (v1)
