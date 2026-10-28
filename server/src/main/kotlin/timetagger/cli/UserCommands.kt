@@ -2,7 +2,7 @@ package timetagger.cli
 
 import timetagger.auth.PasswordService
 import timetagger.config.Config
-import timetagger.db.CredentialRepository
+import timetagger.db.UserRepository
 import timetagger.db.Database
 
 val USER_COMMANDS = setOf("user-list", "users", "user-add", "user-set", "user-set-password", "user-remove", "user-del", "user-delete")
@@ -10,7 +10,7 @@ val USER_COMMANDS = setOf("user-list", "users", "user-add", "user-set", "user-se
 /** The `user-*` commands that manage login credentials; returns the exit code. */
 suspend fun runUserCommand(config: Config, cmd: String, args: List<String>): Int = Database(config.dbUri).use { db ->
     db.migrate()
-    val passwords = PasswordService(db, CredentialRepository())
+    val passwords = PasswordService(db, UserRepository())
     when (cmd) {
         "user-list", "users" -> println(passwords.list().joinToString("\n").ifEmpty { "(no users)" })
         "user-add", "user-set", "user-set-password" -> {

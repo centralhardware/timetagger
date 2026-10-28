@@ -1,47 +1,64 @@
 package timetagger.routes
 
+import io.ktor.http.HttpStatusCode
+import io.ktor.server.request.receive
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
+import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
+import io.ktor.server.routing.post
 import io.ktor.server.routing.put
 import io.ktor.server.routing.route
-import timetagger.badRequest
-import timetagger.db.RecordQuery
-import timetagger.model.RecordsResponse
-import timetagger.model.SettingsResponse
-import timetagger.model.StatusResponse
+import timetagger.Invalid
+import timetagger.db.RecordFilter
+import timetagger.model.RecordBatch
+import timetagger.model.RecordInput
+import timetagger.model.RecordList
+import timetagger.model.SettingInput
+import timetagger.model.SettingList
+import timetagger.service.RecordService
+import timetagger.service.SettingService
 import timetagger.service.SyncService
 
-/** GET records?timerange=t1-t2[&running][&hidden][&tag=a,b], PUT records. */
-fun Route.recordRoutes(sync: SyncService) = route("records") {
+/**
+ * GET /records?from&to[&tag=a&tag=b][&running][&deleted]; GET, PUT and DELETE /records/{key};
+ * POST /records/batch to write several records in one transaction.
+ */
+fun Route.recordRoutes(records: RecordService) = route("records") {
     get {
-        val range = call.request.queryParameters["timerange"].orEmpty().trim()
-        if (range.isEmpty()) badRequest("/records needs timerange (2 timestamps)")
-        val bounds = range.split("-").map { it.toDoubleOrNull() }
-        if (bounds.size != 2 || null in bounds) badRequest("/records timerange needs 2 numbers (timestamps)")
-        val tags = call.request.queryParameters["tag"].orEmpty().replace("#", "").split(",").map { it.trim() }.filter { it.isNotEmpty() }
-        val query = RecordQuery(bounds[0]!!.toLong(), bounds[1]!!.toLong(), tags, call.flag("running"), call.flag("hidden"))
-        call.respond(RecordsResponse(sync.findRecords(call.user.username, query)))
+        val filter = RecordFilter(
+            from = call.instantParam("from") ?: throw Invalid("from is required"),
+            to = call.instantParam("to") ?: throw Invalid("to is required"),
+            tags = call.request.queryParameters.getAll("tag").orEmpty().filter { it.isNotBlank() },
+            running = call.boolParam("running"),
+            deleted = call.boolParam("deleted") ?: false,
+        )
+        call.respond(RecordList(records.find(call.auth.userId, filter)))
     }
-    put { call.respond(sync.pushRecords(call.user.username, call.receiveList("records"))) }
+    post("batch") { call.respond(RecordList(records.putAll(call.auth.userId, call.receive<RecordBatch>().records))) }
+    route("{key}") {
+        get { call.respond(records.get(call.auth.userId, call.path("key"))) }
+        put { call.respond(records.put(call.auth.userId, call.path("key"), call.receive<RecordInput>())) }
+        delete {
+            records.delete(call.auth.userId, call.path("key"))
+            call.respond(HttpStatusCode.NoContent)
+        }
+    }
 }
 
-/** GET settings, PUT settings. */
-fun Route.settingRoutes(sync: SyncService) = route("settings") {
-    get { call.respond(SettingsResponse(sync.allSettings(call.user.username))) }
-    put { call.respond(sync.pushSettings(call.user.username, call.receiveList("settings"))) }
+/** GET /settings; GET and PUT /settings/{key}. */
+fun Route.settingRoutes(settings: SettingService) = route("settings") {
+    get { call.respond(SettingList(settings.all(call.auth.userId))) }
+    route("{key}") {
+        get { call.respond(settings.get(call.auth.userId, call.path("key"))) }
+        put { call.respond(settings.put(call.auth.userId, call.path("key"), call.receive<SettingInput>())) }
+    }
 }
 
-/** GET updates?since=ts: everything changed since the client's last sync. PUT forcereset. */
+/** GET /changes?since=<revision>: everything written after that revision (0 for everything). */
 fun Route.syncRoutes(sync: SyncService) {
-    get("updates") {
-        val raw = call.request.queryParameters["since"].orEmpty().trim()
-        if (raw.isEmpty()) badRequest("/updates needs since")
-        val since = raw.toDoubleOrNull() ?: badRequest("/updates since needs a number (timestamp)")
-        call.respond(sync.updates(call.user.username, since))
-    }
-    put("forcereset") {
-        sync.forceReset(call.user.username)
-        call.respond(StatusResponse("ok"))
+    get("changes") {
+        val since = call.request.queryParameters["since"]?.let { it.toLongOrNull() ?: throw Invalid("since must be a revision number") } ?: 0
+        call.respond(sync.changes(call.auth.userId, since))
     }
 }
