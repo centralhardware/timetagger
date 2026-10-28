@@ -12,4 +12,4 @@ class Invalid(message: String) : ApiException(HttpStatusCode.UnprocessableEntity
 
 /** The stored record was edited more recently than the incoming one. */
 class Conflict(val current: Record) :
-    ApiException(HttpStatusCode.Conflict, "conflict", "record ${current.key} has a newer edit (${current.modifiedAt})")
+    ApiException(HttpStatusCode.Conflict, "conflict", "record ${current.id} has a newer edit (${current.modifiedAt})")

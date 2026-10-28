@@ -11,37 +11,50 @@ import timetagger.model.Record
 import timetagger.model.RecordInput
 import java.time.Instant
 
-private val KEY = Regex("[A-Za-z0-9_-]{1,64}")
 private const val DESCRIPTION_MAX = 1000
 
 class RecordService(private val db: Database, private val records: RecordRepository) {
     suspend fun find(userId: Long, filter: RecordFilter): List<Record> = db.io { records.find(it, userId, filter) }
 
-    suspend fun get(userId: Long, key: String): Record = db.io { records.get(it, userId, key) } ?: throw NotFound("record $key")
+    suspend fun get(userId: Long, id: String): Record = db.io { records.get(it, userId, recordId(id)) } ?: throw NotFound("record $id")
 
-    suspend fun put(userId: Long, key: String, input: RecordInput): Record = db.tx { save(it, userId, key, input) }
+    suspend fun create(userId: Long, input: RecordInput): Record = db.tx { create(it, userId, input) }
 
-    /** All or nothing: one invalid or conflicting record rejects the whole batch. */
-    suspend fun putAll(userId: Long, inputs: List<RecordInput>): List<Record> = db.tx { session ->
-        inputs.map { save(session, userId, it.key ?: throw Invalid("every record in a batch needs a key"), it) }
+    suspend fun update(userId: Long, id: String, input: RecordInput): Record = db.tx { update(it, userId, recordId(id), input) }
+
+    /** All or nothing: one invalid, missing or conflicting record rejects the whole batch. */
+    suspend fun saveAll(userId: Long, inputs: List<RecordInput>): List<Record> = db.tx { session ->
+        inputs.map { input -> input.id?.let { update(session, userId, it, input) } ?: create(session, userId, input) }
     }
 
-    suspend fun delete(userId: Long, key: String) = db.tx { session ->
-        val cur = records.get(session, userId, key) ?: throw NotFound("record $key")
+    suspend fun delete(userId: Long, id: String) = db.tx { session ->
+        val cur = records.get(session, userId, recordId(id)) ?: throw NotFound("record $id")
         if (cur.deletedAt == null) {
             val now = Instant.now()
-            records.save(session, userId, key, cur.start, cur.stop, cur.description, now, now)
+            records.update(session, userId, recordId(id), cur.start, cur.stop, cur.description, now, now)
         }
     }
 
-    private fun save(session: Session, userId: Long, key: String, input: RecordInput): Record {
-        if (!KEY.matches(key)) throw Invalid("key must be 1-64 letters, digits, '-' or '_'")
+    private fun create(session: Session, userId: Long, input: RecordInput): Record {
+        validate(input)
+        val modifiedAt = input.modifiedAt ?: Instant.now()
+        return records.create(session, userId, input.start, input.stop, input.description.trim(), modifiedAt.takeIf { input.deleted }, modifiedAt)
+    }
+
+    private fun update(session: Session, userId: Long, id: Long, input: RecordInput): Record {
+        validate(input)
+        val cur = records.get(session, userId, id) ?: throw NotFound("record $id")
+        val modifiedAt = input.modifiedAt ?: Instant.now()
+        if (cur.modifiedAt > modifiedAt) throw Conflict(cur)
+        val deletedAt = if (input.deleted) cur.deletedAt ?: modifiedAt else null
+        return records.update(session, userId, id, input.start, input.stop, input.description.trim(), deletedAt, modifiedAt)
+    }
+
+    private fun validate(input: RecordInput) {
         if (input.description.length > DESCRIPTION_MAX) throw Invalid("description must be at most $DESCRIPTION_MAX characters")
         if (input.stop != null && input.stop < input.start) throw Invalid("stop must not be before start")
-        val modifiedAt = input.modifiedAt ?: Instant.now()
-        val cur = records.get(session, userId, key)
-        if (cur != null && cur.modifiedAt > modifiedAt) throw Conflict(cur)
-        val deletedAt = if (input.deleted) cur?.deletedAt ?: modifiedAt else null
-        return records.save(session, userId, key, input.start, input.stop, input.description.trim(), deletedAt, modifiedAt)
     }
+
+    /** A malformed id can't name any record. */
+    private fun recordId(id: String): Long = id.toLongOrNull() ?: throw NotFound("record $id")
 }

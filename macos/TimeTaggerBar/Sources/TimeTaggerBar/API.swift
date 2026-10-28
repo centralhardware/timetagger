@@ -3,6 +3,7 @@ import Foundation
 /// A TimeTagger record as the app works with it: unix seconds, and t1 == t2 while running.
 /// The server's v1 shape (ISO times, stop = null while running) is converted in `API`.
 struct Record: Codable, Identifiable, Hashable {
+    /// The server's numeric id as text; empty for a record the server hasn't created yet.
     var key: String
     var mt: Int
     var t1: Int
@@ -26,10 +27,8 @@ struct Record: Codable, Identifiable, Hashable {
             .map { String($0.dropFirst()).lowercased() }
     }
 
-    static func newKey() -> String {
-        let chars = Array("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
-        return String((0..<8).map { _ in chars.randomElement()! })
-    }
+    /// A record that doesn't exist on the server yet; saving it creates it there.
+    static func newKey() -> String { "" }
 }
 
 enum APIError: LocalizedError {
@@ -46,7 +45,8 @@ enum APIError: LocalizedError {
 
 /// The record as the v1 API sends and receives it.
 private struct WireRecord: Codable {
-    var key: String
+    /// Absent for a new record: the server assigns it.
+    var id: Int64?
     var start: Date
     var stop: Date?
     var description: String
@@ -55,7 +55,7 @@ private struct WireRecord: Codable {
     var modifiedAt: Date?
 
     init(_ r: Record) {
-        key = r.key
+        id = Int64(r.key)
         start = Date(timeIntervalSince1970: TimeInterval(r.t1))
         stop = r.isRunning ? nil : Date(timeIntervalSince1970: TimeInterval(r.t2))
         description = r.ds
@@ -66,7 +66,7 @@ private struct WireRecord: Codable {
     var record: Record {
         let t1 = Int(start.timeIntervalSince1970)
         return Record(
-            key: key, mt: Int((modifiedAt ?? start).timeIntervalSince1970), t1: t1,
+            key: id.map(String.init) ?? "", mt: Int((modifiedAt ?? start).timeIntervalSince1970), t1: t1,
             t2: stop.map { Int($0.timeIntervalSince1970) } ?? t1, ds: description,
             deleted: deletedAt == nil ? 0 : 1, st: nil
         )
@@ -136,7 +136,8 @@ struct API {
         return try Self.decoder.decode(Resp.self, from: try await send(URLRequest(url: try url("records", query)))).records.map(\.record)
     }
 
-    /// Writes the records in one transaction (e.g. stop one and start the next).
+    /// Writes the records in one transaction (e.g. stop one and start the next);
+    /// records without a server id are created.
     func put(_ records: [Record]) async throws {
         var req = URLRequest(url: try url("records/batch"))
         req.httpMethod = "POST"

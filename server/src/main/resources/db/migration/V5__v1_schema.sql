@@ -30,8 +30,6 @@ UPDATE users SET
 CREATE TABLE records_v1 (
     id          bigserial PRIMARY KEY,
     user_id     bigint NOT NULL REFERENCES users (id) ON DELETE CASCADE,
-    -- The client-chosen id, unique per user.
-    "key"       text NOT NULL,
     start_at    timestamptz NOT NULL,
     -- NULL while the record is running.
     stop_at     timestamptz,
@@ -42,13 +40,13 @@ CREATE TABLE records_v1 (
     modified_at timestamptz NOT NULL,
     updated_at  timestamptz NOT NULL DEFAULT now(),
     revision    bigint NOT NULL DEFAULT nextval('revision_seq'),
-    UNIQUE (user_id, "key"),
     CHECK (stop_at IS NULL OR stop_at >= start_at)
 );
 
+-- The v2 client-made keys are not kept: every record gets a new numeric id.
 -- Revisions follow the old server-time order, so the history keeps its order.
-INSERT INTO records_v1 (user_id, "key", start_at, stop_at, description, deleted_at, modified_at, updated_at, revision)
-SELECT u.id, r."key",
+INSERT INTO records_v1 (user_id, start_at, stop_at, description, deleted_at, modified_at, updated_at, revision)
+SELECT u.id,
        to_timestamp(r.start_time),
        CASE WHEN r.stop_time = r.start_time THEN NULL ELSE to_timestamp(greatest(r.stop_time, r.start_time)) END,
        coalesce(r.description, ''),

@@ -5,7 +5,8 @@ import kotlinx.serialization.Serializable
 /** A time record. It is running while `stop` is null; a deleted record keeps its row so clients sync the delete. */
 @Serializable
 data class Record(
-    val key: String,
+    /** Assigned by the server when the record is created. */
+    val id: Long,
     val start: IsoInstant,
     val stop: IsoInstant?,
     val description: String,
@@ -18,10 +19,13 @@ data class Record(
     val revision: Long,
 )
 
-/** The body of PUT /records/{key}, and one entry of POST /records/batch (which also carries the key). */
+/**
+ * The body of POST /records and PUT /records/{id}. In POST /records/batch an entry
+ * with an id updates that record and one without creates a new record.
+ */
 @Serializable
 data class RecordInput(
-    val key: String? = null,
+    val id: Long? = null,
     val start: IsoInstant,
     val stop: IsoInstant? = null,
     val description: String = "",

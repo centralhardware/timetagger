@@ -1,6 +1,9 @@
 package timetagger.routes
 
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.server.request.path
+import io.ktor.server.response.header
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
@@ -21,8 +24,8 @@ import timetagger.service.SettingService
 import timetagger.service.SyncService
 
 /**
- * GET /records?from&to[&tag=a&tag=b][&running][&deleted]; GET, PUT and DELETE /records/{key};
- * POST /records/batch to write several records in one transaction.
+ * GET /records?from&to[&tag=a&tag=b][&running][&deleted]; POST /records creates one;
+ * GET, PUT and DELETE /records/{id}; POST /records/batch writes several in one transaction.
  */
 fun Route.recordRoutes(records: RecordService) = route("records") {
     get {
@@ -35,12 +38,17 @@ fun Route.recordRoutes(records: RecordService) = route("records") {
         )
         call.respond(RecordList(records.find(call.auth.userId, filter)))
     }
-    post("batch") { call.respond(RecordList(records.putAll(call.auth.userId, call.receive<RecordBatch>().records))) }
-    route("{key}") {
-        get { call.respond(records.get(call.auth.userId, call.path("key"))) }
-        put { call.respond(records.put(call.auth.userId, call.path("key"), call.receive<RecordInput>())) }
+    post {
+        val created = records.create(call.auth.userId, call.receive<RecordInput>())
+        call.response.header(HttpHeaders.Location, "${call.request.path()}/${created.id}")
+        call.respond(HttpStatusCode.Created, created)
+    }
+    post("batch") { call.respond(RecordList(records.saveAll(call.auth.userId, call.receive<RecordBatch>().records))) }
+    route("{id}") {
+        get { call.respond(records.get(call.auth.userId, call.path("id"))) }
+        put { call.respond(records.update(call.auth.userId, call.path("id"), call.receive<RecordInput>())) }
         delete {
-            records.delete(call.auth.userId, call.path("key"))
+            records.delete(call.auth.userId, call.path("id"))
             call.respond(HttpStatusCode.NoContent)
         }
     }

@@ -84,13 +84,14 @@ Everything except `version` and `sessions` needs `Authorization: Bearer <token>`
 | `DELETE tokens/{web\|api}` | revokes every token of that kind |
 | `GET me` | the signed-in user |
 | `GET records?from=&to=[&tag=a&tag=b][&running=][&deleted=]` | records overlapping the range |
-| `GET / PUT / DELETE records/{key}` | one record; PUT is an upsert, DELETE marks it deleted |
-| `POST records/batch` | `{records: [...]}`, all in one transaction |
+| `POST records` | creates a record → 201 with its numeric `id` |
+| `GET / PUT / DELETE records/{id}` | one record; DELETE marks it deleted |
+| `POST records/batch` | `{records: [...]}` in one transaction; entries with an `id` update, others create |
 | `GET settings`, `GET / PUT settings/{key}` | `{value}` is any JSON |
 | `GET changes?since=<revision>` | everything written after that revision, deletes included |
 | `GET version`, `GET <prefix>status` | |
 
-A record is `{key, start, stop, description, tags, deletedAt, modifiedAt, revision}`; it is
+A record is `{id, start, stop, description, tags, deletedAt, modifiedAt, revision}`; it is
 running while `stop` is null. A write with a `modifiedAt` older than the stored one gets
 409 with the stored record in `current`.
 

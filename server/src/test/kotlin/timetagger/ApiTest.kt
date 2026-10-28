@@ -5,10 +5,12 @@ import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.put
+import io.ktor.client.request.request
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
+import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.server.testing.ApplicationTestBuilder
@@ -87,61 +89,61 @@ class ApiTest {
     @Test
     fun records() = api {
         val t = token()
-        suspend fun put(key: String, body: String) = client.put("$API/records/$key") {
+        suspend fun send(method: String, path: String, body: String) = client.request("$API/$path") {
+            this.method = HttpMethod.parse(method)
             header("Authorization", "Bearer $t"); contentType(ContentType.Application.Json); setBody(body)
         }
+        suspend fun create(body: String): Long {
+            val r = send("POST", "records", body)
+            assertEquals(HttpStatusCode.Created, r.status, r.bodyAsText())
+            return r.obj()["id"]!!.jsonPrimitive.long.also { assertEquals("$API/records/$it", r.headers["Location"]) }
+        }
         suspend fun list(q: String) = client.get("$API/records?$q") { header("Authorization", "Bearer $t") }
-            .obj()["records"]!!.jsonArray.map { it.jsonObject["key"]!!.jsonPrimitive.content }
+            .obj()["records"]!!.jsonArray.map { it.jsonObject["id"]!!.jsonPrimitive.long }
 
-        val a = put("a", """{"start":"2026-10-28T08:00:00Z","stop":"2026-10-28T09:00:00Z","description":"code #Work","modifiedAt":"2026-10-28T09:00:00Z"}""")
-        assertEquals(HttpStatusCode.OK, a.status)
-        assertEquals(listOf("work"), a.obj()["tags"]!!.jsonArray.map { it.jsonPrimitive.content })
-        put("b", """{"start":"2026-10-28T10:00:00Z","description":"run #work #x"}""")
-        assertEquals(HttpStatusCode.UnprocessableEntity, put("c", """{"start":"2026-10-28T10:00:00Z","stop":"2026-10-28T09:00:00Z"}""").status)
-        assertEquals(HttpStatusCode.UnprocessableEntity, put("d", """{"stop":"nope"}""").status)
-        assertEquals(HttpStatusCode.UnprocessableEntity, put("bad key", """{"start":"2026-10-28T10:00:00Z"}""").status)
+        val a = create("""{"start":"2026-10-28T08:00:00Z","stop":"2026-10-28T09:00:00Z","description":"code #Work","modifiedAt":"2026-10-28T09:00:00Z"}""")
+        assertEquals(listOf("work"), client.get("$API/records/$a") { header("Authorization", "Bearer $t") }.obj()["tags"]!!.jsonArray.map { it.jsonPrimitive.content })
+        val b = create("""{"start":"2026-10-28T10:00:00Z","description":"run #work #x"}""")
+        assertEquals(b, a + 1)
+        assertEquals(HttpStatusCode.UnprocessableEntity, send("POST", "records", """{"start":"2026-10-28T10:00:00Z","stop":"2026-10-28T09:00:00Z"}""").status)
+        assertEquals(HttpStatusCode.UnprocessableEntity, send("POST", "records", """{"stop":"nope"}""").status)
+        assertEquals(HttpStatusCode.NotFound, send("PUT", "records/999", """{"start":"2026-10-28T10:00:00Z"}""").status)
+        assertEquals(HttpStatusCode.NotFound, client.get("$API/records/abc") { header("Authorization", "Bearer $t") }.status)
 
         val day = "from=2026-10-28T00:00:00Z&to=2026-10-29T00:00:00Z"
-        assertEquals(listOf("a", "b"), list(day))
-        assertEquals(listOf("b"), list("$day&running=true"))
-        assertEquals(listOf("b"), list("$day&tag=x&tag=work"))
+        assertEquals(listOf(a, b), list(day))
+        assertEquals(listOf(b), list("$day&running=true"))
+        assertEquals(listOf(b), list("$day&tag=x&tag=work"))
         // A running record overlaps any later range.
-        assertEquals(listOf("b"), list("from=2026-11-01T00:00:00Z&to=2026-11-02T00:00:00Z"))
+        assertEquals(listOf(b), list("from=2026-11-01T00:00:00Z&to=2026-11-02T00:00:00Z"))
         assertEquals(HttpStatusCode.UnprocessableEntity, client.get("$API/records?from=yesterday&to=now") { header("Authorization", "Bearer $t") }.status)
 
         // An older edit is refused with the current record.
-        val stale = put("a", """{"start":"2026-10-28T08:00:00Z","description":"old","modifiedAt":"2026-10-27T00:00:00Z"}""")
-        assertEquals(HttpStatusCode.Conflict, stale.status, stale.bodyAsText())
+        val stale = send("PUT", "records/$a", """{"start":"2026-10-28T08:00:00Z","description":"old","modifiedAt":"2026-10-27T00:00:00Z"}""")
+        assertEquals(HttpStatusCode.Conflict, stale.status)
         assertEquals("code #Work", stale.obj()["current"]!!.jsonObject["description"]!!.jsonPrimitive.content)
 
-        // Stop b and start c in one go; one bad entry rejects the whole batch.
-        val batch = client.post("$API/records/batch") {
-            header("Authorization", "Bearer $t"); contentType(ContentType.Application.Json)
-            setBody("""{"records":[{"key":"b","start":"2026-10-28T10:00:00Z","stop":"2026-10-28T11:00:00Z","description":"run #work"},
-                {"key":"c","start":"2026-10-28T11:00:00Z","description":"next"}]}""")
-        }
-        assertEquals(2, batch.obj()["records"]!!.jsonArray.size)
-        val badBatch = client.post("$API/records/batch") {
-            header("Authorization", "Bearer $t"); contentType(ContentType.Application.Json)
-            setBody("""{"records":[{"key":"e","start":"2026-10-28T12:00:00Z"},{"start":"2026-10-28T12:00:00Z"}]}""")
-        }
-        assertEquals(HttpStatusCode.UnprocessableEntity, badBatch.status)
-        assertEquals(HttpStatusCode.NotFound, client.get("$API/records/e") { header("Authorization", "Bearer $t") }.status)
-        assertEquals(listOf("c"), list("$day&running=true"))
+        // Stop b and start a new one in one go; one bad entry rejects the whole batch.
+        val batch = send("POST", "records/batch", """{"records":[{"id":$b,"start":"2026-10-28T10:00:00Z","stop":"2026-10-28T11:00:00Z","description":"run #work"},
+            {"start":"2026-10-28T11:00:00Z","description":"next"}]}""").obj()["records"]!!.jsonArray
+        val c = batch[1].jsonObject["id"]!!.jsonPrimitive.long
+        val badBatch = send("POST", "records/batch", """{"records":[{"start":"2026-10-28T12:00:00Z","description":"lost"},{"id":999,"start":"2026-10-28T12:00:00Z"}]}""")
+        assertEquals(HttpStatusCode.NotFound, badBatch.status)
+        assertEquals(listOf(a, b, c), list(day))
+        assertEquals(listOf(c), list("$day&running=true"))
 
-        assertEquals(HttpStatusCode.NoContent, client.delete("$API/records/a") { header("Authorization", "Bearer $t") }.status)
-        assertEquals(listOf("b", "c"), list(day))
-        assertEquals(listOf("a"), list("$day&deleted=true"))
-        assertEquals(HttpStatusCode.NotFound, client.delete("$API/records/zzz") { header("Authorization", "Bearer $t") }.status)
+        assertEquals(HttpStatusCode.NoContent, client.delete("$API/records/$a") { header("Authorization", "Bearer $t") }.status)
+        assertEquals(listOf(b, c), list(day))
+        assertEquals(listOf(a), list("$day&deleted=true"))
+        assertEquals(HttpStatusCode.NotFound, client.delete("$API/records/12345") { header("Authorization", "Bearer $t") }.status)
 
         // Sync: everything after a revision, deletes included.
-        val allResp = client.get("$API/changes") { header("Authorization", "Bearer $t") }
-        val all = allResp.obj()
+        val all = client.get("$API/changes") { header("Authorization", "Bearer $t") }.obj()
         val rev = all["revision"]!!.jsonPrimitive.long
         assertEquals(3, all["records"]!!.jsonArray.size)
-        put("c", """{"start":"2026-10-28T11:00:00Z","stop":"2026-10-28T11:30:00Z","description":"next"}""")
+        send("PUT", "records/$c", """{"start":"2026-10-28T11:00:00Z","stop":"2026-10-28T11:30:00Z","description":"next"}""")
         val after = client.get("$API/changes?since=$rev") { header("Authorization", "Bearer $t") }.obj()
-        assertEquals(listOf("c"), after["records"]!!.jsonArray.map { it.jsonObject["key"]!!.jsonPrimitive.content })
+        assertEquals(listOf(c), after["records"]!!.jsonArray.map { it.jsonObject["id"]!!.jsonPrimitive.long })
     }
 
     @Test
@@ -185,11 +187,12 @@ class V5MigrationTest {
                     fun one(sql: String) = st.executeQuery(sql).let { it.next(); it.getString(1) }
                     assertEquals("hash", one("SELECT password_hash FROM users WHERE username = 'alex'"))
                     assertEquals("seed1", one("SELECT api_token_seed FROM users"))
-                    assertNull(one("SELECT stop_at FROM records WHERE \"key\" = 'run'"))
+                    assertNull(one("SELECT stop_at FROM records WHERE description = 'running'"))
                     assertEquals("1", one("SELECT count(*) FROM records WHERE deleted_at IS NOT NULL"))
                     assertEquals("call,work", one("SELECT string_agg(tag, ',' ORDER BY tag) FROM record_tags"))
                     // Revisions follow the old server-time order.
-                    assertEquals("gone,done,run", one("SELECT string_agg(\"key\", ',' ORDER BY revision) FROM records"))
+                    assertEquals("x,#Work code #call,running", one("SELECT string_agg(description, ',' ORDER BY revision) FROM records"))
+                    assertEquals("1,2,3", one("SELECT string_agg(id::text, ',' ORDER BY id) FROM records"))
                     assertEquals("2", one("SELECT value::text FROM settings"))
                     assertEquals("0", one("SELECT count(*) FROM pg_tables WHERE tablename IN ('credentials', 'userinfo', 'schema_migrations')"))
                 }
