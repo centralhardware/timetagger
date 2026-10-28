@@ -121,8 +121,116 @@ struct MenuView: View {
         }
     }
 
+    private func runningCard(_ r: Record) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Tracking", systemImage: "circle.fill")
+                .font(.caption.weight(.semibold)).textCase(.uppercase)
+                .foregroundStyle(.red)
+            HStack(spacing: 14) {
+                Text("Since **\(store.clock(r.t1))** local")
+                if store.showsWorkZone {
+                    Text("**\(store.clock(r.t1, work: true))** \(store.workZoneName) · work")
+                }
+            }
+            .font(.callout).foregroundStyle(.secondary).monospacedDigit()
+            Text(Store.format(r.duration(now: store.now)))
+                .font(.system(size: 44, weight: .light)).monospacedDigit()
+            Text(r.ds.isEmpty ? "(no description)" : r.ds).font(.headline).lineLimit(2)
+            HStack(spacing: 8) {
+                Button { Task { await store.stop(r) } } label: {
+                    Label("Stop", systemImage: "stop.fill").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent).tint(.red).controlSize(.large)
+                Button { editing = r } label: { Image(systemName: "pencil") }
+                    .controlSize(.large)
+                    .accessibilityLabel("Edit current record")
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.background, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private var idleCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Not tracking").font(.caption.weight(.semibold)).textCase(.uppercase).foregroundStyle(.secondary)
+                Spacer()
+                Text("**\(store.clock(store.now))** local")
+                if store.showsWorkZone { Text("**\(store.clock(store.now, work: true))** \(store.workZoneName)") }
+            }
+            .font(.callout).monospacedDigit()
+            taskField("What are you working on? #tag", icon: nil)
+            Button(action: startDraft) {
+                Label("Start", systemImage: "play.fill").frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent).controlSize(.large)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.background, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private func taskField(_ prompt: String, icon: String?) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                if let icon { Image(systemName: icon).foregroundStyle(.secondary) }
+                TextField(prompt, text: $draft)
+                    .textFieldStyle(.plain)
+                    .onSubmit(startDraft)
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 38)
+            .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            TagSuggestions(text: $draft, tags: store.tags)
+        }
+    }
+
+    private func startDraft() {
+        let ds = draft
+        draft = ""
+        Task { await store.start(ds) }
+    }
+
     private func load(_ op: () async throws -> Void) async {
         do { try await op() } catch { store.error = error.localizedDescription }
+    }
+}
+
+/// Tags that complete the #word being typed at the end of `text`; clicking one fills it in.
+struct TagSuggestions: View {
+    @Binding var text: String
+    let tags: [String]
+
+    var body: some View {
+        let matches = Self.matches(for: text, in: tags)
+        if !matches.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(matches, id: \.self) { tag in
+                        Button("#" + tag) { text = Self.complete(text, with: tag) }
+                            .buttonStyle(.bordered).controlSize(.small)
+                    }
+                }
+            }
+        }
+    }
+
+    /// The partial tag at the end of the text, without '#', or nil when the last word isn't one.
+    static func partial(_ text: String) -> String? {
+        guard let last = text.split(separator: " ", omittingEmptySubsequences: false).last, last.hasPrefix("#") else { return nil }
+        return last.dropFirst().lowercased()
+    }
+
+    static func matches(for text: String, in tags: [String]) -> [String] {
+        guard let p = partial(text) else { return [] }
+        return Array(tags.filter { $0.hasPrefix(p) && $0 != p }.prefix(5))
+    }
+
+    static func complete(_ text: String, with tag: String) -> String {
+        var words = text.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
+        words[words.count - 1] = "#" + tag
+        return words.joined(separator: " ") + " "
     }
 }
 
@@ -161,6 +269,7 @@ struct EditRecordView: View {
     var body: some View {
         Form {
             TextField("Description", text: $record.ds)
+            TagSuggestions(text: $record.ds, tags: store.tags)
             DatePicker("Start", selection: $start)
             Toggle("Running", isOn: $running)
             if !running { DatePicker("End", selection: $end) }

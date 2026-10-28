@@ -137,6 +137,12 @@ struct API {
         return try Self.decoder.decode(Resp.self, from: try await send(URLRequest(url: try url("records", query)))).records.map(\.record)
     }
 
+    /// The tags in use, most recently used first.
+    func tags() async throws -> [String] {
+        struct Resp: Decodable { let tags: [String] }
+        return try Self.decoder.decode(Resp.self, from: try await send(URLRequest(url: try url("records/tags")))).tags
+    }
+
     /// Writes the records in one transaction (e.g. stop one and start the next);
     /// records without a server id are created.
     func put(_ records: [Record]) async throws {
