@@ -16,6 +16,8 @@ private const val DESCRIPTION_MAX = 1000
 class RecordService(private val db: Database, private val records: RecordRepository) {
     suspend fun find(userId: Long, filter: RecordFilter): List<Record> = db.io { records.find(it, userId, filter) }
 
+    suspend fun tags(userId: Long): List<String> = db.io { records.tags(it, userId) }
+
     suspend fun get(userId: Long, id: String): Record = db.io { records.get(it, userId, recordId(id)) } ?: throw NotFound("record $id")
 
     suspend fun create(userId: Long, input: RecordInput): Record = db.write(userId) { create(it, userId, input) }

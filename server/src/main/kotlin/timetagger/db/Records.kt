@@ -50,6 +50,19 @@ class RecordRepository {
     fun get(session: Session, userId: Long, id: Long): Record? =
         session.single(queryOf("$select WHERE r.user_id = ? AND r.id = ?", userId, id), ::record)
 
+    /** Every tag on a live record, most recently started first. */
+    fun tags(session: Session, userId: Long): List<String> =
+        session.list(
+            queryOf(
+                """
+                SELECT t.tag FROM record_tags t JOIN records r ON r.id = t.record_id
+                WHERE r.user_id = ? AND r.deleted_at IS NULL
+                GROUP BY t.tag ORDER BY max(r.start_at) DESC, t.tag
+                """,
+                userId,
+            ),
+        ) { it.string("tag") }
+
     fun changedSince(session: Session, userId: Long, revision: Long): List<Record> =
         session.list(queryOf("$select WHERE r.user_id = ? AND r.revision > ? ORDER BY r.revision", userId, revision), ::record)
 

@@ -33,6 +33,10 @@ data class RecordInput(
     val revision: Long? = null,
 )
 
+/** The user's tags, most recently used first. */
+@Serializable
+data class TagList(val tags: List<String>)
+
 @Serializable
 data class RecordBatch(val records: List<RecordInput>)
 

@@ -86,6 +86,7 @@ Everything except `version` and `sessions` needs `Authorization: Bearer <token>`
 | `DELETE tokens/{web\|api}` | revokes every token of that kind |
 | `GET me` | the signed-in user |
 | `GET records?from=&to=[&tag=a&tag=b][&running=][&deleted=]` | records overlapping the range |
+| `GET records/tags` | tags in use, most recently used first |
 | `POST records` | creates a record → 201 with its numeric `id` |
 | `GET / PUT / DELETE records/{id}` | one record; DELETE marks it deleted |
 | `POST records/batch` | `{records: [...]}` in one transaction; entries with an `id` update, others create |

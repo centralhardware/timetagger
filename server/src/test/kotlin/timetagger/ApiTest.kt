@@ -136,6 +136,8 @@ class ApiTest {
         assertEquals(listOf(a, b), list(day))
         assertEquals(listOf(b), list("$day&running=true"))
         assertEquals(listOf(b), list("$day&tag=x&tag=work"))
+        // Tags in use, the latest first; b started after a.
+        assertEquals(listOf("work", "x"), client.get("$API/records/tags") { header("Authorization", "Bearer $t") }.obj()["tags"]!!.jsonArray.map { it.jsonPrimitive.content })
         // A running record overlaps any later range.
         assertEquals(listOf(b), list("from=2026-11-01T00:00:00Z&to=2026-11-02T00:00:00Z"))
         assertEquals(HttpStatusCode.UnprocessableEntity, client.get("$API/records?from=yesterday&to=now") { header("Authorization", "Bearer $t") }.status)
