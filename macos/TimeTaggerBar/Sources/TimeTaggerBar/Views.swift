@@ -372,7 +372,8 @@ struct ReportView: View {
     private func generate() async {
         loading = true
         defer { loading = false }
-        let (t1, t2) = options.period.range
+        // The period's days follow the report's time zone (the work zone by default).
+        let (t1, t2) = options.period.range(in: builder.timeZone)
         do {
             let recs = try await store.api.records(from: t1, to: t2).filter { !$0.isDeleted }
             rows = builder.rows(recs, from: t1, to: t2)
