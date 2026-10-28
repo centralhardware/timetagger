@@ -5,7 +5,7 @@
 FROM eclipse-temurin:25-jdk AS build
 WORKDIR /src
 COPY server /src
-RUN ./gradlew --no-daemon -q installDist
+RUN --mount=type=cache,target=/root/.gradle ./gradlew --no-daemon -q installDist
 
 FROM eclipse-temurin:25-jre
 # Ubuntu-based images ship a user "ubuntu" with UID 1000; replace it.
