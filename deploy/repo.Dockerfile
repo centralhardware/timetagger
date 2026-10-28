@@ -2,9 +2,7 @@
 # The build context must be the root of the repo. Used by CI for the ghcr image.
 # Runs as an unprivileged user (UID 1000).
 
-# The build output is plain JVM bytecode, so it is built once on the runner's own platform
-# rather than again under QEMU for arm64, which took ~9 minutes.
-FROM --platform=$BUILDPLATFORM eclipse-temurin:25-jdk AS build
+FROM eclipse-temurin:25-jdk AS build
 WORKDIR /src
 COPY server /src
 RUN --mount=type=cache,target=/root/.gradle ./gradlew --no-daemon -q installDist
