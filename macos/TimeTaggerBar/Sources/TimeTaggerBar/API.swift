@@ -159,8 +159,11 @@ struct API {
     static let userAgent: String = {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
         let os = ProcessInfo.processInfo.operatingSystemVersion
-        let host = Host.current().localizedName ?? "Mac"
-        return "TimeTaggerBar/\(version) · \(host) · macOS \(os.majorVersion).\(os.minorVersion)"
+        // Header values must be ASCII: fold "é" to "e", drop what has no ASCII form ("·" came out as "�").
+        let name = (Host.current().localizedName ?? "Mac").applyingTransform(.toLatin, reverse: false)?
+            .applyingTransform(.stripDiacritics, reverse: false) ?? "Mac"
+        let host = String(name.unicodeScalars.filter { $0.isASCII && $0.value >= 0x20 && $0 != ";" && $0 != ")" })
+        return "TimeTaggerBar/\(version) (\(host.isEmpty ? "Mac" : host); macOS \(os.majorVersion).\(os.minorVersion))"
     }()
 
     private func url(_ path: String, _ query: [URLQueryItem] = []) throws -> URL {

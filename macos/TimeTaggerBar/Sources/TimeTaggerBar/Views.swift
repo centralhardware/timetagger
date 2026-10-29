@@ -468,13 +468,18 @@ struct SettingsView: View {
                     if let u = store.update {
                         Link("Version \(u.version) is available", destination: u.url)
                     } else {
+                        HStack {
                         Button("Check for Updates") { Task { await store.checkForUpdate() } }
+                        Text(store.updateStatus).font(.caption).foregroundStyle(.secondary)
+                    }
                     }
                 }
             }
             .tabItem { Label("About", systemImage: "info.circle") }
         }
         .frame(width: 480)
+        // Hugs its content, so a window size macOS restored from an older, taller layout doesn't stick.
+        .fixedSize(horizontal: false, vertical: true)
         .onAppear { url = store.serverURL; username = store.username }
         .task(id: store.serverURL) { store.serverVersion = (try? await store.api.version()) ?? "unreachable" }
     }
