@@ -335,7 +335,7 @@ struct TagSuggestions: View {
 
     /// The tag being typed at the end of the text, without '#', or nil when there is none yet.
     static func partial(_ text: String) -> String? {
-        guard let last = text.split(whereSeparator: { $0 == " " || $0 == "," }, omittingEmptySubsequences: false).last else { return nil }
+        guard let last = text.split(omittingEmptySubsequences: false, whereSeparator: { $0 == " " || $0 == "," }).last else { return nil }
         let p = last.drop(while: { $0 == "#" }).lowercased()
         return p.isEmpty ? nil : p
     }
@@ -420,6 +420,20 @@ struct EditRecordView: View {
     }
 }
 
+enum SettingsSection: String, CaseIterable, Identifiable {
+    case account = "Account", general = "General", reminders = "Reminders", about = "About"
+
+    var id: Self { self }
+    var icon: String {
+        switch self {
+        case .account: return "person.crop.circle"
+        case .general: return "gearshape"
+        case .reminders: return "bell"
+        case .about: return "info.circle"
+        }
+    }
+}
+
 struct SettingsView: View {
     @EnvironmentObject var store: Store
     @State private var openAtLogin = SMAppService.mainApp.status == .enabled
@@ -429,11 +443,27 @@ struct SettingsView: View {
     @State private var password = ""
     @State private var status = ""
     @State private var busy = false
+    @State private var section: SettingsSection? = .account
 
     var body: some View {
-        // Tabs, the way macOS settings windows go: each one fits without scrolling.
-        TabView {
-            tab {
+        // A sidebar of sections, the way System Settings goes.
+        NavigationSplitView {
+            List(SettingsSection.allCases, selection: $section) { s in
+                Label(s.rawValue, systemImage: s.icon).tag(s)
+            }
+            .navigationSplitViewColumnWidth(170)
+        } detail: {
+            detail
+        }
+        .frame(width: 640, height: 440)
+        .onAppear { url = store.serverURL; username = store.username }
+        .task(id: store.serverURL) { store.serverVersion = (try? await store.api.version()) ?? "unreachable" }
+    }
+
+    @ViewBuilder private var detail: some View {
+        switch section ?? .account {
+        case .account:
+            pane {
                 Section("Account") {
                     if !store.signedIn {
                         TextField("Server", text: $url, prompt: Text("https://timetagger.example.com"))
@@ -457,40 +487,43 @@ struct SettingsView: View {
                             Button("Sign Out") { Task { await store.signOut() } }
                         }
                     }
-                }
-                if store.signedIn { AccessSection() }
             }
-            .tabItem { Label("Account", systemImage: "person.crop.circle") }
-            tab {
+            if store.signedIn { AccessSection() }
+        
+            }
+        case .general:
+            pane {
                 Section("Time") {
                     Picker("Work time zone", selection: $store.workTimeZoneID) {
                         ForEach(TimeZone.knownTimeZoneIdentifiers, id: \.self) { Text($0).tag($0) }
                     }
                     Toggle("Show work time next to local time", isOn: $store.showWorkTime)
                     Toggle("Pause the running task while the Mac sleeps", isOn: $store.pauseOnSleep)
-                }
-                Section("General") {
-                    Toggle("Open at login", isOn: $openAtLogin)
-                        .onChange(of: openAtLogin) { on in setOpenAtLogin(on) }
-                    if !loginError.isEmpty { Text(loginError).font(.caption).foregroundStyle(.red) }
-                }
-                Section("Tickets") {
-                    TextField("Ticket URL", text: $store.ticketURL, prompt: Text("https://company.atlassian.net/browse/{key}"))
-                    Text("A tag like #sm-1061 links to this URL with {key} = SM-1061.").font(.caption).foregroundStyle(.secondary)
-                }
             }
-            .tabItem { Label("General", systemImage: "gearshape") }
-            tab {
+            Section("General") {
+                Toggle("Open at login", isOn: $openAtLogin)
+                    .onChange(of: openAtLogin) { on in setOpenAtLogin(on) }
+                if !loginError.isEmpty { Text(loginError).font(.caption).foregroundStyle(.red) }
+            }
+            Section("Tickets") {
+                TextField("Ticket URL", text: $store.ticketURL, prompt: Text("https://company.atlassian.net/browse/{key}"))
+                Text("A tag like #sm-1061 links to this URL with {key} = SM-1061.").font(.caption).foregroundStyle(.secondary)
+            }
+        
+            }
+        case .reminders:
+            pane {
                 Section("Reminders") {
                     Toggle("Remind me when nothing is tracked", isOn: $store.remindIdle)
                     if store.remindIdle {
                         Stepper("Working hours from \(store.workStartHour):00", value: $store.workStartHour, in: 0...23)
                         Stepper("to \(store.workEndHour):00, weekdays", value: $store.workEndHour, in: 1...24)
                     }
-                }
             }
-            .tabItem { Label("Reminders", systemImage: "bell") }
-            tab {
+        
+            }
+        case .about:
+            pane {
                 Section("About") {
                     LabeledContent("TimeTaggerBar", value: Store.appVersion)
                     LabeledContent("Server", value: store.serverVersion)
@@ -498,26 +531,18 @@ struct SettingsView: View {
                         Link("Version \(u.version) is available", destination: u.url)
                     } else {
                         HStack {
-                        Button("Check for Updates") { Task { await store.checkForUpdate() } }
-                        Text(store.updateStatus).font(.caption).foregroundStyle(.secondary)
+                            Button("Check for Updates") { Task { await store.checkForUpdate() } }
+                            Text(store.updateStatus).font(.caption).foregroundStyle(.secondary)
+                        }
                     }
-                    }
-                }
             }
-            .tabItem { Label("About", systemImage: "info.circle") }
+        
+            }
         }
-        .frame(width: 480)
-        // Hugs its content, so a window size macOS restored from an older, taller layout doesn't stick.
-        .fixedSize(horizontal: false, vertical: true)
-        .onAppear { url = store.serverURL; username = store.username }
-        .task(id: store.serverURL) { store.serverVersion = (try? await store.api.version()) ?? "unreachable" }
     }
 
-    private func tab(@ViewBuilder _ content: () -> some View) -> some View {
-        Form { content() }
-            .formStyle(.grouped)
-            .scrollDisabled(true)
-            .fixedSize(horizontal: false, vertical: true)
+    private func pane(@ViewBuilder _ content: () -> some View) -> some View {
+        Form { content() }.formStyle(.grouped)
     }
 
     private func setOpenAtLogin(_ on: Bool) {
