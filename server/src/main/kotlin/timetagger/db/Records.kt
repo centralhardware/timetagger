@@ -4,7 +4,6 @@ import kotliquery.Row
 import kotliquery.Session
 import kotliquery.queryOf
 import timetagger.model.Record
-import timetagger.model.Tags
 import java.time.Instant
 
 /** Filters for GET /records. */
@@ -14,7 +13,7 @@ data class RecordFilter(
     /** Every tag must be on the record. */
     val tags: List<String> = emptyList(),
     val running: Boolean? = null,
-    /** Case-insensitive substring of the description. */
+    /** Case-insensitive substring of the description or of a tag. */
     val text: String? = null,
     val deleted: Boolean = false,
 )
@@ -45,7 +44,7 @@ class RecordRepository {
             params["tag$i"] = tag.removePrefix("#").lowercase()
         }
         f.text?.let {
-            where += "r.description ILIKE :text ESCAPE '\\'"
+            where += "(r.description ILIKE :text ESCAPE '\\' OR EXISTS (SELECT 1 FROM record_tags t WHERE t.record_id = r.id AND t.tag ILIKE :text ESCAPE '\\'))"
             params["text"] = "%" + it.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
         }
         f.running?.let { where += if (it) "r.stop_at IS NULL" else "r.stop_at IS NOT NULL" }
@@ -75,7 +74,7 @@ class RecordRepository {
     /** Creates the record (the database picks the id) with a new revision and its tags. */
     fun create(
         session: Session, userId: Long, start: Instant, stop: Instant?,
-        description: String, deletedAt: Instant?,
+        description: String, tags: List<String>, deletedAt: Instant?,
     ): Record {
         val id = session.single(
             queryOf(
@@ -90,13 +89,13 @@ class RecordRepository {
                 ),
             ),
         ) { it.long("id") }!!
-        return withTags(session, userId, id, description)
+        return withTags(session, userId, id, tags)
     }
 
     /** Replaces the record's fields, stamps a new revision and rewrites its tags. */
     fun update(
         session: Session, userId: Long, id: Long, start: Instant, stop: Instant?,
-        description: String, deletedAt: Instant?,
+        description: String, tags: List<String>, deletedAt: Instant?,
     ): Record {
         session.update(
             queryOf(
@@ -111,12 +110,12 @@ class RecordRepository {
                 ),
             ),
         )
-        return withTags(session, userId, id, description)
+        return withTags(session, userId, id, tags)
     }
 
-    private fun withTags(session: Session, userId: Long, id: Long, description: String): Record {
+    private fun withTags(session: Session, userId: Long, id: Long, tags: List<String>): Record {
         session.update(queryOf("DELETE FROM record_tags WHERE record_id = ?", id))
-        for (tag in Tags.of(description)) {
+        for (tag in tags) {
             session.update(queryOf("INSERT INTO record_tags (record_id, tag) VALUES (?, ?)", id, tag))
         }
         return get(session, userId, id)!!

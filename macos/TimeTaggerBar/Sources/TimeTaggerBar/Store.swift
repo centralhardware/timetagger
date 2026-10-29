@@ -141,7 +141,7 @@ final class Store: ObservableObject {
         // Give Wi-Fi a moment to come back.
         try? await Task.sleep(nanoseconds: 5_000_000_000)
         let t = Int(Date().timeIntervalSince1970)
-        let resumed = toResume.map { Record(key: Record.newKey(), rev: 0, t1: t, t2: t, ds: $0.ds, deleted: 0) }
+        let resumed = toResume.map { Record(key: Record.newKey(), rev: 0, t1: t, t2: t, ds: $0.ds, tags: $0.tags, deleted: 0) }
         await save(stoppedCopies(toResume, at: sleptAt) + resumed)
     }
 
@@ -294,10 +294,10 @@ final class Store: ObservableObject {
     }
 
     /// Starts a new record, stopping whatever is running (like the web app's default).
-    func start(_ description: String) async {
+    func start(_ description: String, tags: [String] = []) async {
         let t = Int(Date().timeIntervalSince1970)
         let stopped = running.map { r -> Record in var r = r; r.t2 = max(t, r.t1 + 1); return r }
-        let new = Record(key: Record.newKey(), rev: 0, t1: t, t2: t, ds: description.trimmingCharacters(in: .whitespaces), deleted: 0)
+        let new = Record(key: Record.newKey(), rev: 0, t1: t, t2: t, ds: description.trimmingCharacters(in: .whitespaces), tags: tags, deleted: 0)
         await save(stopped + [new], label: "Started \u{201C}\(new.ds)\u{201D}", before: running)
     }
 

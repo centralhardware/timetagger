@@ -5,6 +5,7 @@ import timetagger.db.Database
 import timetagger.model.Tags
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 
 class UnitTest {
     @Test
@@ -26,7 +27,8 @@ class UnitTest {
 
     @Test
     fun tags() {
-        assertEquals(listOf("call", "core-2517"), Tags.of("#call CORE #Core-2517, #call"))
-        assertEquals(emptyList(), Tags.of("no tags # here"))
+        assertEquals(listOf("call", "core-2517"), Tags.normalize(listOf("#call", " Core-2517", "call", "")))
+        assertNull(Tags.normalize(listOf("two words")))
+        assertNull(Tags.normalize(listOf("a,b")))
     }
 }

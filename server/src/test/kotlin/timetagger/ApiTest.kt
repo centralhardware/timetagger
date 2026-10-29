@@ -185,9 +185,12 @@ class ApiTest {
         suspend fun list(q: String) = client.get("$API/records?$q") { header("Authorization", "Bearer $t") }
             .obj()["records"]!!.jsonArray.map { it.jsonObject["id"]!!.jsonPrimitive.long }
 
-        val a = create("""{"start":"2026-10-28T08:00:00Z","stop":"2026-10-28T09:00:00Z","description":"code #Work"}""")
+        val a = create("""{"start":"2026-10-28T08:00:00Z","stop":"2026-10-28T09:00:00Z","description":"code","tags":["#Work"]}""")
         assertEquals(listOf("work"), client.get("$API/records/$a") { header("Authorization", "Bearer $t") }.obj()["tags"]!!.jsonArray.map { it.jsonPrimitive.content })
-        val b = create("""{"start":"2026-10-28T10:00:00Z","description":"run #work #x"}""")
+        val b = create("""{"start":"2026-10-28T10:00:00Z","description":"run #literal","tags":["work","x"]}""")
+        // A # in the description is just text.
+        assertEquals(listOf("work", "x"), client.get("$API/records/$b") { header("Authorization", "Bearer $t") }.obj()["tags"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertEquals(HttpStatusCode.UnprocessableEntity, send("POST", "records", """{"start":"2026-10-28T10:00:00Z","tags":["two words"]}""").status)
         assertEquals(b, a + 1)
         assertEquals(HttpStatusCode.UnprocessableEntity, send("POST", "records", """{"start":"2026-10-28T10:00:00Z","stop":"2026-10-28T09:00:00Z"}""").status)
         assertEquals(HttpStatusCode.UnprocessableEntity, send("POST", "records", """{"stop":"nope"}""").status)
@@ -200,9 +203,9 @@ class ApiTest {
         assertEquals(listOf(b), list("$day&tag=x&tag=work"))
         // Tags in use, the latest first; b started after a.
         assertEquals(listOf("work", "x"), client.get("$API/records/tags") { header("Authorization", "Bearer $t") }.obj()["tags"]!!.jsonArray.map { it.jsonPrimitive.content })
-        // Search needs no range and matches any part of the description, case aside; % is literal.
+        // Search needs no range and matches any part of the description or a tag, case aside; % is literal.
         assertEquals(listOf(a), list("q=CODE"))
-        assertEquals(listOf(a, b), list("q=%23work"))
+        assertEquals(listOf(a, b), list("q=WOR"))
         assertEquals(emptyList(), list("q=%25"))
         // A running record overlaps any later range.
         assertEquals(listOf(b), list("from=2026-11-01T00:00:00Z&to=2026-11-02T00:00:00Z"))
@@ -212,11 +215,11 @@ class ApiTest {
         val aRev = client.get("$API/records/$a") { header("Authorization", "Bearer $t") }.obj()["revision"]!!.jsonPrimitive.long
         val stale = send("PUT", "records/$a", """{"start":"2026-10-28T08:00:00Z","description":"old","revision":${aRev - 1}}""")
         assertEquals(HttpStatusCode.Conflict, stale.status)
-        assertEquals("code #Work", stale.obj()["current"]!!.jsonObject["description"]!!.jsonPrimitive.content)
-        assertEquals(HttpStatusCode.OK, send("PUT", "records/$a", """{"start":"2026-10-28T08:00:00Z","stop":"2026-10-28T09:00:00Z","description":"code #Work","revision":$aRev}""").status)
+        assertEquals("code", stale.obj()["current"]!!.jsonObject["description"]!!.jsonPrimitive.content)
+        assertEquals(HttpStatusCode.OK, send("PUT", "records/$a", """{"start":"2026-10-28T08:00:00Z","stop":"2026-10-28T09:00:00Z","description":"code","tags":["work"],"revision":$aRev}""").status)
 
         // Stop b and start a new one in one go; one bad entry rejects the whole batch.
-        val batch = send("POST", "records/batch", """{"records":[{"id":$b,"start":"2026-10-28T10:00:00Z","stop":"2026-10-28T11:00:00Z","description":"run #work"},
+        val batch = send("POST", "records/batch", """{"records":[{"id":$b,"start":"2026-10-28T10:00:00Z","stop":"2026-10-28T11:00:00Z","description":"run","tags":["work"]},
             {"start":"2026-10-28T11:00:00Z","description":"next"}]}""").obj()["records"]!!.jsonArray
         val c = batch[1].jsonObject["id"]!!.jsonPrimitive.long
         val badBatch = send("POST", "records/batch", """{"records":[{"start":"2026-10-28T12:00:00Z","description":"lost"},{"id":999,"start":"2026-10-28T12:00:00Z"}]}""")
@@ -271,7 +274,7 @@ class ApiTest {
         val start = Instant.parse("2026-10-28T08:00:00Z")
         coroutineScope {
             // Slow takes the lock first and holds it a while before writing.
-            val slow = async { db.write(alice) { s -> Thread.sleep(500); repo.create(s, alice, start, null, "slow", null) } }
+            val slow = async { db.write(alice) { s -> Thread.sleep(500); repo.create(s, alice, start, null, "slow", emptyList(), null) } }
             delay(100)
             val fast = async { records.create(alice, RecordInput(start = start, description = "fast")) }
             val (a, b) = slow.await() to fast.await()
@@ -386,8 +389,8 @@ class V5MigrationTest {
                     assertNull(one("SELECT stop_at FROM records WHERE description = 'running'"))
                     assertEquals("1", one("SELECT count(*) FROM records WHERE deleted_at IS NOT NULL"))
                     assertEquals("call,work", one("SELECT string_agg(tag, ',' ORDER BY tag) FROM record_tags"))
-                    // Revisions follow the old server-time order.
-                    assertEquals("x,#Work code #call,running", one("SELECT string_agg(description, ',' ORDER BY revision) FROM records"))
+                    // Revisions follow the old server-time order; V8 then moves the #tags out of the text, bumping that record.
+                    assertEquals("x,running,code", one("SELECT string_agg(description, ',' ORDER BY revision) FROM records"))
                     assertEquals("1,2,3", one("SELECT string_agg(id::text, ',' ORDER BY id) FROM records"))
                     assertEquals("2", one("SELECT value::text FROM settings"))
                     assertEquals("0", one("SELECT count(*) FROM pg_tables WHERE tablename IN ('credentials', 'userinfo', 'schema_migrations')"))
