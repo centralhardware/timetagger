@@ -9,9 +9,12 @@ import timetagger.db.RecordFilter
 import timetagger.db.RecordRepository
 import timetagger.model.Record
 import timetagger.model.RecordInput
+import timetagger.model.Tags
 import java.time.Instant
 
 private const val DESCRIPTION_MAX = 1000
+private const val TAGS_MAX = 50
+private const val TAG_MAX = 100
 private val FAR_FUTURE: Instant = Instant.parse("9999-12-31T00:00:00Z")
 
 class RecordService(private val db: Database, private val records: RecordRepository) {
@@ -33,34 +36,39 @@ class RecordService(private val db: Database, private val records: RecordReposit
     suspend fun delete(userId: Long, id: String) = db.write(userId) { session ->
         val cur = records.get(session, userId, recordId(id)) ?: throw NotFound("record $id")
         if (cur.deletedAt == null) {
-            records.update(session, userId, recordId(id), cur.start, cur.stop, cur.description, Instant.now())
+            records.update(session, userId, recordId(id), cur.start, cur.stop, cur.description, cur.tags, Instant.now())
         }
     }
 
     private fun create(session: Session, userId: Long, input: RecordInput): Record {
-        validate(input)
+        val tags = validate(input)
         if (input.stop == null && !input.deleted) stopRunning(session, userId, input.start)
-        return records.create(session, userId, input.start, input.stop, input.description.trim(), Instant.now().takeIf { input.deleted })
+        return records.create(session, userId, input.start, input.stop, input.description.trim(), tags, Instant.now().takeIf { input.deleted })
     }
 
     /** Only one record runs at a time: starting one stops whatever was running, when the new one starts. */
     private fun stopRunning(session: Session, userId: Long, at: Instant) {
         for (r in records.find(session, userId, RecordFilter(from = Instant.EPOCH, to = FAR_FUTURE, running = true))) {
-            records.update(session, userId, r.id, r.start, maxOf(at, r.start), r.description, null)
+            records.update(session, userId, r.id, r.start, maxOf(at, r.start), r.description, r.tags, null)
         }
     }
 
     private fun update(session: Session, userId: Long, id: Long, input: RecordInput): Record {
-        validate(input)
+        val tags = validate(input)
         val cur = records.get(session, userId, id) ?: throw NotFound("record $id")
         if (input.revision != null && input.revision != cur.revision) throw Conflict(cur)
         val deletedAt = if (input.deleted) cur.deletedAt ?: Instant.now() else null
-        return records.update(session, userId, id, input.start, input.stop, input.description.trim(), deletedAt)
+        return records.update(session, userId, id, input.start, input.stop, input.description.trim(), tags, deletedAt)
     }
 
-    private fun validate(input: RecordInput) {
+    /** Returns the normalized tags. */
+    private fun validate(input: RecordInput): List<String> {
         if (input.description.length > DESCRIPTION_MAX) throw Invalid("description must be at most $DESCRIPTION_MAX characters")
         if (input.stop != null && input.stop < input.start) throw Invalid("stop must not be before start")
+        val tags = Tags.normalize(input.tags) ?: throw Invalid("a tag must not contain spaces, '#' or ','")
+        if (tags.size > TAGS_MAX) throw Invalid("at most $TAGS_MAX tags")
+        if (tags.any { it.length > TAG_MAX }) throw Invalid("a tag must be at most $TAG_MAX characters")
+        return tags
     }
 
     /** A malformed id can't name any record. */

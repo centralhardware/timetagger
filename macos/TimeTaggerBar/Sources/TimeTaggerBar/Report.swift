@@ -111,8 +111,7 @@ struct ReportBuilder {
     }
 
     private func description(_ r: Record) -> String {
-        guard options.excludeTags else { return r.ds }
-        return r.ds.split(separator: " ").filter { !$0.hasPrefix("#") }.joined(separator: " ")
+        r.ds
     }
 
     private func periodName(_ t: Int, _ cal: Calendar) -> String {

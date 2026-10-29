@@ -40,9 +40,9 @@ class MergeTest {
     }
 
     /** A record [length] seconds long starting [start] seconds in; length 0 means running. */
-    private fun rec(id: Long, start: Long, length: Long, ds: String = "waiting for a task") = Record(
+    private fun rec(id: Long, start: Long, length: Long, ds: String = "waiting for a task", tags: List<String> = emptyList()) = Record(
         id = id, start = t0.plusSeconds(start), stop = if (length == 0L) null else t0.plusSeconds(start + length),
-        description = ds, tags = emptyList(), deletedAt = null, revision = id,
+        description = ds, tags = tags, deletedAt = null, revision = id,
     )
 
     private fun ids(recs: List<Record>) = merge.chains(recs).map { c -> c.records.map { it.id } }
@@ -53,8 +53,8 @@ class MergeTest {
         assertEquals(listOf(listOf(1L, 2L)), ids(listOf(rec(1, 0, 70), rec(2, 70, 10), rec(3, 80, 0))), "a running record ends the chain, which still stands")
         assertEquals(emptyList(), ids(listOf(rec(1, 0, 70), rec(2, 70, 0), rec(3, 70, 10))), "a running record in the middle doesn't glue across itself")
         assertEquals(emptyList(), ids(listOf(rec(1, 0, 70), rec(2, 200, 10))), "a gap over a minute")
-        assertEquals(emptyList(), ids(listOf(rec(1, 0, 70), rec(2, 70, 10, "#sm-1061"), rec(3, 80, 10))), "something else in between")
-        assertEquals(listOf(listOf(1L, 2L)), ids(listOf(rec(1, 0, 70), rec(2, 70, 10, "waiting for a task #finished"))), "#finished compares equal")
+        assertEquals(emptyList(), ids(listOf(rec(1, 0, 70), rec(2, 70, 10, tags = listOf("sm-1061")), rec(3, 80, 10))), "something else in between")
+        assertEquals(listOf(listOf(1L, 2L)), ids(listOf(rec(1, 0, 70), rec(2, 70, 10, tags = listOf("finished")))), "#finished compares equal")
         assertEquals(listOf(listOf(1L, 2L, 3L)), ids(listOf(rec(1, 0, 70), rec(2, 70, 10), rec(3, 81, 10))), "three in a row")
     }
 
@@ -63,13 +63,13 @@ class MergeTest {
         val records = RecordService(db, RecordRepository())
         val alice = db.io { UserRepository().byName(it, "alice") }!!.id
         fun at(s: Long) = t0.plusSeconds(s)
-        val a = records.create(alice, RecordInput(start = at(0), stop = at(3600), description = "#core-2517"))
-        records.create(alice, RecordInput(start = at(3601), stop = at(5400), description = "#core-2517 #finished"))
-        records.create(alice, RecordInput(start = at(9000), stop = at(9600), description = "#core-2517"))
+        val a = records.create(alice, RecordInput(start = at(0), stop = at(3600), tags = listOf("core-2517")))
+        records.create(alice, RecordInput(start = at(3601), stop = at(5400), tags = listOf("core-2517", "finished")))
+        records.create(alice, RecordInput(start = at(9000), stop = at(9600), tags = listOf("core-2517")))
 
         assertEquals(1, merge.mergeRecent(alice, now = at(10_000)))
         val live = db.io { RecordRepository().find(it, alice, RecordFilter(from = at(-1), to = at(20_000))) }
-        assertEquals(listOf(a.id to "#core-2517 #finished", live[1].id to "#core-2517"), live.map { it.id to it.description })
+        assertEquals(listOf(a.id to listOf("core-2517", "finished"), live[1].id to listOf("core-2517")), live.map { it.id to it.tags })
         assertEquals(at(5400), live[0].stop)
         // Nothing left: a second round writes nothing.
         assertEquals(0, merge.mergeRecent(alice, now = at(10_000)))

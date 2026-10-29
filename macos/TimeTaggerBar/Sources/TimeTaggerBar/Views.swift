@@ -5,6 +5,7 @@ struct MenuView: View {
     @EnvironmentObject var store: Store
     @Environment(\.openWindow) private var openWindow
     @State private var draft = ""
+    @State private var draftTags = ""
     @State private var editing: Record?
     @StateObject private var feed = DayFeed()
 
@@ -28,7 +29,7 @@ struct MenuView: View {
 
             if let r = store.running.first {
                 runningCard(r)
-                taskField("Switch to… #tag", icon: "play")
+                taskField("Switch to…", icon: "play")
             } else {
                 idleCard
             }
@@ -109,10 +110,11 @@ struct MenuView: View {
                 .font(.caption).monospacedDigit().foregroundStyle(.secondary)
                 .frame(width: 82, alignment: .leading)
             Text(r.ds.isEmpty ? "(no description)" : r.ds).lineLimit(1)
+            TagLine(tags: r.tags)
             Spacer()
             Text(Store.format(r.duration(now: store.now), seconds: false)).monospacedDigit().foregroundStyle(.secondary)
             if !r.isRunning {
-                Button { Task { await store.start(r.ds) } } label: { Image(systemName: "play.fill") }
+                Button { Task { await store.start(r.ds, tags: r.tags) } } label: { Image(systemName: "play.fill") }
                     .buttonStyle(.borderless)
                     .accessibilityLabel("Resume \(r.ds)")
             }
@@ -124,7 +126,7 @@ struct MenuView: View {
         .onTapGesture { editing = r }
         .contextMenu {
             Button("Edit…") { editing = r }
-            Button("Resume") { Task { await store.start(r.ds) } }
+            Button("Resume") { Task { await store.start(r.ds, tags: r.tags) } }
             if r.isRunning { Button("Stop") { Task { await store.stop(r) } } }
             TicketLinks(record: r)
             Divider()
@@ -147,6 +149,7 @@ struct MenuView: View {
             Text(Store.format(r.duration(now: store.now)))
                 .font(.system(size: 44, weight: .light)).monospacedDigit()
             Text(r.ds.isEmpty ? "(no description)" : r.ds).font(.headline).lineLimit(2)
+            TagLine(tags: r.tags).font(.callout)
             HStack(spacing: 8) {
                 Button { Task { await store.stop(r) } } label: {
                     Label("Stop", systemImage: "stop.fill").frame(maxWidth: .infinity)
@@ -171,7 +174,7 @@ struct MenuView: View {
                 if store.showsWorkZone { Text("**\(store.clock(store.now, work: true))** \(store.workZoneName)") }
             }
             .font(.callout).monospacedDigit()
-            taskField("What are you working on? #tag", icon: nil)
+            taskField("What are you working on?", icon: nil)
             Button(action: startDraft) {
                 Label("Start", systemImage: "play.fill").frame(maxWidth: .infinity)
             }
@@ -189,18 +192,26 @@ struct MenuView: View {
                 TextField(prompt, text: $draft)
                     .textFieldStyle(.plain)
                     .onSubmit(startDraft)
+                Divider().frame(height: 18)
+                Image(systemName: "number").foregroundStyle(.secondary)
+                TextField("tags", text: $draftTags)
+                    .textFieldStyle(.plain)
+                    .frame(width: 110)
+                    .onSubmit(startDraft)
             }
             .padding(.horizontal, 12)
             .frame(height: 38)
             .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            TagSuggestions(text: $draft, tags: store.tags)
+            TagSuggestions(text: $draftTags, tags: store.tags)
         }
     }
 
     private func startDraft() {
         let ds = draft
+        let tags = Record.parseTags(draftTags)
         draft = ""
-        Task { await store.start(ds) }
+        draftTags = ""
+        Task { await store.start(ds, tags: tags) }
     }
 
     private func load(_ op: () async throws -> Void) async {
@@ -292,7 +303,18 @@ struct TicketLinks: View {
     }
 }
 
-/// Tags that complete the #word being typed at the end of `text`; clicking one fills it in.
+/// The record's tags as quiet "#a #b" text.
+struct TagLine: View {
+    let tags: [String]
+
+    var body: some View {
+        if !tags.isEmpty {
+            Text(tags.map { "#" + $0 }.joined(separator: " ")).lineLimit(1).foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// Tags that complete the word being typed at the end of a tags field; clicking one fills it in.
 struct TagSuggestions: View {
     @Binding var text: String
     let tags: [String]
@@ -311,20 +333,22 @@ struct TagSuggestions: View {
         }
     }
 
-    /// The partial tag at the end of the text, without '#', or nil when the last word isn't one.
+    /// The tag being typed at the end of the text, without '#', or nil when there is none yet.
     static func partial(_ text: String) -> String? {
-        guard let last = text.split(separator: " ", omittingEmptySubsequences: false).last, last.hasPrefix("#") else { return nil }
-        return last.dropFirst().lowercased()
+        guard let last = text.split(whereSeparator: { $0 == " " || $0 == "," }, omittingEmptySubsequences: false).last else { return nil }
+        let p = last.drop(while: { $0 == "#" }).lowercased()
+        return p.isEmpty ? nil : p
     }
 
     static func matches(for text: String, in tags: [String]) -> [String] {
         guard let p = partial(text) else { return [] }
-        return Array(tags.filter { $0.hasPrefix(p) && $0 != p }.prefix(5))
+        let taken = Set(Record.parseTags(text))
+        return Array(tags.filter { $0.hasPrefix(p) && $0 != p && !taken.contains($0) }.prefix(5))
     }
 
     static func complete(_ text: String, with tag: String) -> String {
         var words = text.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
-        words[words.count - 1] = "#" + tag
+        words[words.count - 1] = tag
         return words.joined(separator: " ") + " "
     }
 }
@@ -339,6 +363,7 @@ struct RecordRow: View {
                 .font(.caption).monospacedDigit().foregroundStyle(.secondary)
                 .frame(width: 90, alignment: .leading)
             Text(record.ds.isEmpty ? "(no description)" : record.ds).lineLimit(1)
+            TagLine(tags: record.tags)
             Spacer()
             Text(Store.format(record.duration(now: now), seconds: false)).monospacedDigit()
         }
@@ -360,11 +385,13 @@ struct EditRecordView: View {
     @State private var start = Date()
     @State private var end = Date()
     @State private var running = false
+    @State private var tagText = ""
 
     var body: some View {
         Form {
             TextField("Description", text: $record.ds)
-            TagSuggestions(text: $record.ds, tags: store.tags)
+            TextField("Tags", text: $tagText, prompt: Text("core-12 call"))
+            TagSuggestions(text: $tagText, tags: store.tags)
             DatePicker("Start", selection: $start)
             Toggle("Running", isOn: $running)
             if !running { DatePicker("End", selection: $end) }
@@ -375,6 +402,7 @@ struct EditRecordView: View {
             start = Date(timeIntervalSince1970: TimeInterval(record.t1))
             end = Date(timeIntervalSince1970: TimeInterval(record.t2))
             running = record.isRunning
+            tagText = record.tags.joined(separator: " ")
         }
         .toolbar {
             ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
@@ -382,6 +410,7 @@ struct EditRecordView: View {
                 Button("Save") {
                     record.t1 = Int(start.timeIntervalSince1970)
                     record.t2 = running ? record.t1 : max(Int(end.timeIntervalSince1970), record.t1 + 1)
+                    record.tags = Record.parseTags(tagText)
                     let r = record
                     Task { await store.update(r) }
                     dismiss()
@@ -645,7 +674,7 @@ struct HistoryView: View {
                             .onTapGesture(count: 2) { editing = r }
                             .contextMenu {
                                 Button("Edit…") { editing = r }
-                                Button("Resume") { Task { await store.start(r.ds) } }
+                                Button("Resume") { Task { await store.start(r.ds, tags: r.tags) } }
                                 if r.isRunning { Button("Stop") { Task { await store.stop(r) } } }
                                 TicketLinks(record: r)
                                 Divider()
@@ -670,7 +699,7 @@ struct HistoryView: View {
         .overlay {
             if days.isEmpty && (found != nil || feed.reachedEnd) { Text("No records").foregroundStyle(.secondary) }
         }
-        .searchable(text: $search, prompt: "Search description or #tag")
+        .searchable(text: $search, prompt: "Search description or tag")
         .toolbar {
             ToolbarItemGroup {
                 Button {

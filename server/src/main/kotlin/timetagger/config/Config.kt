@@ -18,7 +18,7 @@ data class Config(
     val autoMerge: Boolean = true,
     /** The largest gap between two records that still merge. */
     val mergeGapSeconds: Long = 60,
-    /** A tag set aside when comparing descriptions, kept on the merged record (empty for none). */
+    /** A tag set aside when comparing records, kept on the merged record (empty for none). */
     val mergeIgnoreTag: String = "finished",
 ) {
     val host: String get() = bind.substringBeforeLast(":")

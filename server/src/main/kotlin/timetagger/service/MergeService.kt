@@ -22,8 +22,8 @@ data class Chain(val records: List<Record>)
  * apart; after each write the user's recent records are checked and such runs merged.
  *
  * Mergeable, all of: both records closed (a running one is never touched and breaks the
- * run); the same description once [ignoreTag] (`#finished`, which marks a day's last
- * block) is set aside; the next one starts at most [gap] after the previous stops; nothing
+ * run); the same description and the same tags once [ignoreTag] (`finished`, which marks
+ * a day's last block) is set aside; the next one starts at most [gap] after the previous stops; nothing
  * else in between. The earliest record is kept and stretched to the last one's stop, the
  * rest are deleted. The marker survives if any record in the run carried it.
  */
@@ -54,8 +54,8 @@ class MergeService(
             for (chain in found) {
                 val first = chain.records.first()
                 val last = chain.records.last()
-                records.update(session, userId, first.id, first.start, last.stop, mergedDescription(chain), null)
-                for (r in chain.records.drop(1)) records.update(session, userId, r.id, r.start, r.stop, r.description, now)
+                records.update(session, userId, first.id, first.start, last.stop, first.description, mergedTags(chain), null)
+                for (r in chain.records.drop(1)) records.update(session, userId, r.id, r.start, r.stop, r.description, r.tags, now)
                 log.info("Merged {} records into {} ({})", chain.records.size, first.id, first.description)
             }
             found.size
@@ -78,7 +78,7 @@ class MergeService(
             }
             val prev = current.lastOrNull()
             val gapToPrev = prev?.stop?.let { Duration.between(it, r.start) }
-            if (prev != null && clean(prev.description) == clean(r.description) &&
+            if (prev != null && prev.description.trim() == r.description.trim() && clean(prev.tags) == clean(r.tags) &&
                 gapToPrev != null && !gapToPrev.isNegative && gapToPrev <= gap
             ) {
                 current += r
@@ -91,14 +91,11 @@ class MergeService(
         return out
     }
 
-    private fun mergedDescription(chain: Chain): String {
-        val base = clean(chain.records.first().description)
-        val marked = ignoreTag != null && chain.records.any { clean(it.description) != it.description.trim().replace(Regex("\\s+"), " ") }
-        return if (marked) "$base #$ignoreTag".trim() else chain.records.first().description
+    private fun mergedTags(chain: Chain): List<String> {
+        val marked = ignoreTag != null && chain.records.any { ignoreTag in it.tags }
+        return if (marked) (chain.records.first().tags + ignoreTag!!).distinct().sorted() else chain.records.first().tags
     }
 
-    /** The description with the ignored tag dropped and spaces collapsed. */
-    fun clean(description: String): String =
-        description.split(Regex("\\s+")).filter { it.isNotEmpty() && (ignoreTag == null || !it.trimStart('#').equals(ignoreTag, ignoreCase = true)) }
-            .joinToString(" ")
+    /** The tags without the ignored one. */
+    fun clean(tags: List<String>): List<String> = tags.filter { it != ignoreTag }
 }

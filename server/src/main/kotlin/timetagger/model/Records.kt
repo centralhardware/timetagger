@@ -10,7 +10,7 @@ data class Record(
     val start: IsoInstant,
     val stop: IsoInstant?,
     val description: String,
-    /** The #tags in the description, lower case, without the '#'. */
+    /** Lower case, sorted; stored apart from the description. */
     val tags: List<String>,
     val deletedAt: IsoInstant?,
     /** Increases with every write; see GET /changes. */
@@ -27,6 +27,8 @@ data class RecordInput(
     val start: IsoInstant,
     val stop: IsoInstant? = null,
     val description: String = "",
+    /** Replaces the record's tags; see [Tags.normalize]. */
+    val tags: List<String> = emptyList(),
     /** Marks the record deleted (or restores it with false). */
     val deleted: Boolean = false,
     /** The revision the client last read; if the record has moved on since, the write is rejected with 409. Omit to overwrite. */
@@ -44,7 +46,12 @@ data class RecordBatch(val records: List<RecordInput>)
 data class RecordList(val records: List<Record>)
 
 object Tags {
-    private val pattern = Regex("#([^\\s#,]+)")
+    private val valid = Regex("[^\\s#,]+")
 
-    fun of(description: String): List<String> = pattern.findAll(description).map { it.groupValues[1].lowercase() }.distinct().sorted().toList()
+    /** Lower case, without a leading '#', de-duplicated and sorted; null when a tag is malformed. */
+    fun normalize(tags: List<String>): List<String>? {
+        val out = tags.map { it.trim().removePrefix("#").lowercase() }.filter { it.isNotEmpty() }
+        if (out.any { !valid.matches(it) }) return null
+        return out.distinct().sorted()
+    }
 }

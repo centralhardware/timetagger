@@ -10,6 +10,8 @@ struct Record: Codable, Identifiable, Hashable {
     var t1: Int
     var t2: Int
     var ds: String
+    /// Lower case, without '#'; kept apart from the description.
+    var tags: [String] = []
     var deleted: Int?
     var st: Double?
 
@@ -21,11 +23,14 @@ struct Record: Codable, Identifiable, Hashable {
         (isRunning ? now : t2) - t1
     }
 
-    /// Tags without the leading '#', in the order they appear.
-    var tags: [String] {
-        ds.split(whereSeparator: { $0.isWhitespace })
-            .filter { $0.hasPrefix("#") && $0.count > 1 }
-            .map { String($0.dropFirst()).lowercased() }
+    /// Tags typed as text ("#call core-12, x"): split on spaces and commas, '#' optional.
+    static func parseTags(_ text: String) -> [String] {
+        var out: [String] = []
+        for w in text.split(whereSeparator: { $0.isWhitespace || $0 == "," }) {
+            let t = w.drop(while: { $0 == "#" }).replacingOccurrences(of: "#", with: "").lowercased()
+            if !t.isEmpty && !out.contains(t) { out.append(t) }
+        }
+        return out
     }
 
     /// A record that doesn't exist on the server yet; saving it creates it there.
@@ -103,6 +108,7 @@ private struct WireRecord: Codable {
     var start: Date
     var stop: Date?
     var description: String
+    var tags: [String]?
     var deleted: Bool?
     var deletedAt: Date?
     var revision: Int64?
@@ -112,6 +118,7 @@ private struct WireRecord: Codable {
         start = Date(timeIntervalSince1970: TimeInterval(r.t1))
         stop = r.isRunning ? nil : Date(timeIntervalSince1970: TimeInterval(r.t2))
         description = r.ds
+        tags = r.tags
         deleted = r.isDeleted
         revision = r.rev == 0 ? nil : r.rev
     }
@@ -121,7 +128,7 @@ private struct WireRecord: Codable {
         return Record(
             key: id.map(String.init) ?? "", rev: revision ?? 0, t1: t1,
             t2: stop.map { Int($0.timeIntervalSince1970) } ?? t1, ds: description,
-            deleted: deletedAt == nil ? 0 : 1, st: nil
+            tags: tags ?? [], deleted: deletedAt == nil ? 0 : 1, st: nil
         )
     }
 }
@@ -223,10 +230,12 @@ struct API {
         return try Self.decoder.decode(Batch.self, from: try await send(req)).records.map(\.record)
     }
 
-    /// Records whose description contains `text`, across all time, newest first.
+    /// Records whose description or a tag contains `text`, across all time, newest first.
+    /// A leading '#' is dropped: tags are stored without it.
     func search(_ text: String) async throws -> [Record] {
         struct Resp: Decodable { let records: [WireRecord] }
-        let data = try await send(URLRequest(url: try url("records", [URLQueryItem(name: "q", value: text)])))
+        let q = String(text.drop(while: { $0 == "#" }))
+        let data = try await send(URLRequest(url: try url("records", [URLQueryItem(name: "q", value: q)])))
         return try Self.decoder.decode(Resp.self, from: data).records.map(\.record).sorted { $0.t1 > $1.t1 }
     }
 

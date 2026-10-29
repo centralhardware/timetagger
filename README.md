@@ -75,7 +75,7 @@ Set with `TIMETAGGER_<NAME>` environment variables or `--<name>=<value>` argumen
 | `path_prefix` | `/timetagger/` | served there as well as at the root |
 | `auto_merge` | `true` | after every write, fold back-to-back records of one task into one |
 | `merge_gap_seconds` | `60` | the largest gap that still merges |
-| `merge_ignore_tag` | `finished` | set aside when comparing descriptions, kept on the merged record |
+| `merge_ignore_tag` | `finished` | set aside when comparing tags, kept on the merged record |
 
 
 ## API (v1)
@@ -98,7 +98,7 @@ SHA-256 hashes. A new password ends every session.
 | `GET api-keys`, `POST api-keys {name}`, `DELETE api-keys/{id}` | (access token) keys for scripts; `POST` shows the `tt_…` key once |
 | `GET me` | the signed-in user |
 | `GET records/tags` | tags in use, most recently used first |
-| `GET records?from=&to=[&tag=a&tag=b][&running=][&deleted=][&q=]` | records overlapping the range; `q` searches descriptions (from/to optional then) |
+| `GET records?from=&to=[&tag=a&tag=b][&running=][&deleted=][&q=]` | records overlapping the range; `q` searches descriptions and tags (from/to optional then) |
 | `POST records` | creates a record → 201 with its numeric `id` |
 | `GET / PUT / DELETE records/{id}` | one record; DELETE marks it deleted |
 | `POST records/batch` | `{records: [...]}` in one transaction; entries with an `id` update, others create |
@@ -108,7 +108,8 @@ SHA-256 hashes. A new password ends every session.
 | `GET version`, `GET <prefix>status` | |
 
 A record is `{id, start, stop, description, tags, deletedAt, revision}`; it is
-running while `stop` is null. A write may carry the `revision` it was based on: if the
+running while `stop` is null. `tags` is its own list (lower case, no `#`, no spaces or
+commas) and a write replaces it; a `#` in the description is plain text. A write may carry the `revision` it was based on: if the
 record has changed since, it gets 409 with the stored record in `current`. Without one
 it overwrites.
 

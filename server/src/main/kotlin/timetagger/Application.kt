@@ -65,7 +65,7 @@ class Services(db: Database, config: Config) {
     val records = RecordService(db, recordRepo)
     val settings = SettingService(db, settingRepo)
     val sync = SyncService(db, recordRepo, settingRepo)
-    val merge = MergeService(db, recordRepo, Duration.ofSeconds(config.mergeGapSeconds), config.mergeIgnoreTag.ifBlank { null })
+    val merge = MergeService(db, recordRepo, Duration.ofSeconds(config.mergeGapSeconds), config.mergeIgnoreTag.lowercase().ifBlank { null })
 }
 
 fun version(): String = Database.resource("version.txt").trim()
