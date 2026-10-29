@@ -487,9 +487,8 @@ struct SettingsView: View {
                             Button("Sign Out") { Task { await store.signOut() } }
                         }
                     }
-            }
-            if store.signedIn { AccessSection() }
-        
+                }
+                if store.signedIn { AccessSection() }
             }
         case .general:
             pane {
@@ -499,17 +498,16 @@ struct SettingsView: View {
                     }
                     Toggle("Show work time next to local time", isOn: $store.showWorkTime)
                     Toggle("Pause the running task while the Mac sleeps", isOn: $store.pauseOnSleep)
-            }
-            Section("General") {
-                Toggle("Open at login", isOn: $openAtLogin)
-                    .onChange(of: openAtLogin) { on in setOpenAtLogin(on) }
-                if !loginError.isEmpty { Text(loginError).font(.caption).foregroundStyle(.red) }
-            }
-            Section("Tickets") {
-                TextField("Ticket URL", text: $store.ticketURL, prompt: Text("https://company.atlassian.net/browse/{key}"))
-                Text("A tag like #sm-1061 links to this URL with {key} = SM-1061.").font(.caption).foregroundStyle(.secondary)
-            }
-        
+                }
+                Section("General") {
+                    Toggle("Open at login", isOn: $openAtLogin)
+                        .onChange(of: openAtLogin) { on in setOpenAtLogin(on) }
+                    if !loginError.isEmpty { Text(loginError).font(.caption).foregroundStyle(.red) }
+                }
+                Section("Tickets") {
+                    TextField("Ticket URL", text: $store.ticketURL, prompt: Text("https://company.atlassian.net/browse/{key}"))
+                    Text("A tag like #sm-1061 links to this URL with {key} = SM-1061.").font(.caption).foregroundStyle(.secondary)
+                }
             }
         case .reminders:
             pane {
@@ -519,8 +517,7 @@ struct SettingsView: View {
                         Stepper("Working hours from \(store.workStartHour):00", value: $store.workStartHour, in: 0...23)
                         Stepper("to \(store.workEndHour):00, weekdays", value: $store.workEndHour, in: 1...24)
                     }
-            }
-        
+                }
             }
         case .about:
             pane {
@@ -535,8 +532,7 @@ struct SettingsView: View {
                             Text(store.updateStatus).font(.caption).foregroundStyle(.secondary)
                         }
                     }
-            }
-        
+                }
             }
         }
     }
