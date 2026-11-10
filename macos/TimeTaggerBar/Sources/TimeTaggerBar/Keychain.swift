@@ -6,6 +6,20 @@ enum Keychain {
     private static let service = "TimeTaggerBar"
     private static let account = "refreshtoken"
 
+    /// Whether a token is stored, without reading it. Reading the secret can make macOS ask
+    /// for keychain access (and block until answered); checking that the item exists never does.
+    static func hasToken() -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnAttributes as String: true,
+        ]
+        var out: AnyObject?
+        return SecItemCopyMatching(query as CFDictionary, &out) == errSecSuccess
+    }
+
+    /// Reads the token. Call it off the main thread: it can wait on a keychain prompt.
     static func load() -> String {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,

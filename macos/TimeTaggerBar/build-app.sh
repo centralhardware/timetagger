@@ -31,7 +31,24 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSUIElement</key><true/>
 </dict></plist>
 PLIST
-codesign --force --sign - "$APP"
+# Sign with the same certificate every release when CI provides one. The keychain trusts the
+# app by its signature: an ad-hoc signature changes with every build, so macOS would ask for
+# keychain access again after each update, and the app sits frozen behind that prompt.
+if [ -n "$MACOS_CERT_P12" ]; then
+  KC="$PWD/build/signing.keychain-db"
+  security delete-keychain "$KC" 2>/dev/null || true
+  security create-keychain -p ci "$KC"
+  security set-keychain-settings "$KC"
+  security unlock-keychain -p ci "$KC"
+  echo "$MACOS_CERT_P12" | base64 --decode > build/cert.p12
+  security import build/cert.p12 -k "$KC" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+  rm build/cert.p12
+  security set-key-partition-list -S apple-tool:,apple: -s -k ci "$KC" >/dev/null
+  codesign --force --keychain "$KC" --sign "TimeTaggerBar Signing" "$APP"
+  security delete-keychain "$KC"
+else
+  codesign --force --sign - "$APP"
+fi
 
 # Standard drag-to-Applications installer window.
 rm -rf build/TimeTaggerBar.dmg build/dmg && mkdir build/dmg && cp -R "$APP" build/dmg/

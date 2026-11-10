@@ -48,7 +48,7 @@ final class Store: ObservableObject {
     @AppStorage("workStartHour") var workStartHour = 9
     @AppStorage("workEndHour") var workEndHour = 18
     /// Signed in while the keychain holds a refresh token; the server signing us out clears it.
-    @Published var signedIn = !Keychain.load().isEmpty
+    @Published var signedIn = Keychain.hasToken()
     let session = AuthSession()
     @Published var period: Period = .today
     @Published var records: [Record] = []
