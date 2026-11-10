@@ -44,7 +44,12 @@ if [ -n "$MACOS_CERT_P12" ]; then
   security import build/cert.p12 -k "$KC" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
   rm build/cert.p12
   security set-key-partition-list -S apple-tool:,apple: -s -k ci "$KC" >/dev/null
-  codesign --force --keychain "$KC" --sign "TimeTaggerBar Signing" "$APP"
+  # codesign only looks in the search list. The cert is self-signed (not trusted), so name it by hash.
+  OLD_KCS=$(security list-keychains -d user | tr -d '"')
+  security list-keychains -d user -s "$KC" $OLD_KCS
+  HASH=$(security find-certificate -c "TimeTaggerBar Signing" -Z "$KC" | awk '/SHA-1/ {print $NF}')
+  codesign --force --keychain "$KC" --sign "$HASH" "$APP"
+  security list-keychains -d user -s $OLD_KCS
   security delete-keychain "$KC"
 else
   codesign --force --sign - "$APP"
