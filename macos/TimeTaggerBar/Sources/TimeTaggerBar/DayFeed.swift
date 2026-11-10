@@ -1,7 +1,7 @@
 import Foundation
 
 /// Records grouped by day, newest first, reaching a week further back each time
-/// the end of the list scrolls into view. Shared by the menu and the History window.
+/// the end of the list scrolls into view.
 @MainActor
 final class DayFeed: ObservableObject {
     struct Day: Identifiable {
