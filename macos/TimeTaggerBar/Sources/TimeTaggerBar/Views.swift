@@ -12,7 +12,7 @@ struct MenuView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             if let err = store.error {
-                Text(err).font(.caption).foregroundStyle(.red).lineLimit(3)
+                Label(err, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.secondary).lineLimit(3)
             }
             if let u = store.undoable {
                 HStack {
@@ -29,47 +29,55 @@ struct MenuView: View {
 
             if let r = store.running.first {
                 runningCard(r)
-                taskField("Switch to…", icon: "play")
+                taskField("Switch to…", icon: "arrow.right")
             } else {
                 idleCard
             }
 
             daySection
+                .padding(.horizontal, -8)
 
             Divider()
 
-            HStack(spacing: 10) {
-                Text("Today").foregroundStyle(.secondary)
-                Text(Store.format(store.todayTotal, seconds: false)).bold().monospacedDigit()
+            HStack(spacing: 4) {
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(Store.format(store.todayTotal, seconds: false)).font(.headline).monospacedDigit()
+                    Text(store.showsWorkZone ? "Worked today, \(store.workZoneName)" : "Worked today")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Spacer()
-                Button("History") {
+                Button {
                     openWindow(id: "history")
                     NSApp.activate(ignoringOtherApps: true)
-                }
+                } label: { Image(systemName: "list.bullet.rectangle") }
                 .keyboardShortcut("y", modifiers: .command)
-                Button("Report") {
+                .help("History (⌘Y)")
+                .accessibilityLabel("History")
+                Button {
                     openWindow(id: "report")
                     NSApp.activate(ignoringOtherApps: true)
-                }
+                } label: { Image(systemName: "tablecells") }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
+                .help("Report (⇧⌘R)")
+                .accessibilityLabel("Report")
                 Menu {
                     Button("Settings…") {
                         openWindow(id: "settings")
                         NSApp.activate(ignoringOtherApps: true)
                     }
-                    .keyboardShortcut(",", modifiers: .command)
                     Button("Refresh") { Task { await store.refresh() } }
-                        .keyboardShortcut("r", modifiers: .command)
                     Divider()
                     Button("Quit TimeTaggerBar") { NSApp.terminate(nil) }
-                        .keyboardShortcut("q", modifiers: .command)
                 } label: { Image(systemName: "ellipsis.circle") }
                     .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
                     .fixedSize()
+                    .help("More")
                     .accessibilityLabel("More")
             }
-            .buttonStyle(.link)
-            .font(.callout)
+            .buttonStyle(.borderless)
+            .imageScale(.large)
+            .foregroundStyle(.secondary)
         }
         .padding(16)
         .frame(width: 340)
@@ -81,23 +89,27 @@ struct MenuView: View {
     }
 
     /// Today first, older days below, loading further back as the end scrolls into view.
+    /// Within a day, sessions of the same task fold into one row.
     private var daySection: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0, pinnedViews: .sectionHeaders) {
                 ForEach(feed.days()) { day in
                     Section {
-                        ForEach(day.records) { r in dayRow(r) }
+                        ForEach(TaskGroup.group(day.records)) { g in
+                            TaskGroupRow(group: g, editing: $editing)
+                        }
                     } header: {
                         HStack {
                             Text(Calendar.current.isDateInToday(day.id) ? "Today" : day.id.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated)))
-                                .font(.caption.weight(.semibold))
                             Spacer()
                             Text(Store.format(day.records.reduce(0) { $0 + $1.duration(now: store.now) }, seconds: false))
-                                .font(.caption).monospacedDigit()
+                                .monospacedDigit()
                         }
+                        .font(.caption.weight(.medium))
                         .foregroundStyle(.secondary)
-                        .padding(.horizontal, 6).padding(.vertical, 4)
-                        .background(.regularMaterial)
+                        .padding(.horizontal, 8)
+                        .frame(height: 24)
+                        .background(.bar)
                     }
                 }
                 if !feed.reachedEnd {
@@ -109,91 +121,59 @@ struct MenuView: View {
         .frame(height: 300)
     }
 
-    private func dayRow(_ r: Record) -> some View {
-        HStack(spacing: 8) {
-            Text(store.clock(r.t1) + "–" + (r.isRunning ? "now" : store.clock(r.t2)))
-                .font(.caption).monospacedDigit().foregroundStyle(.secondary)
-                .frame(width: 82, alignment: .leading)
-            Text(r.ds.isEmpty ? "(no description)" : r.ds).lineLimit(1)
-            TagLine(tags: r.tags)
-            Spacer()
-            Text(Store.format(r.duration(now: store.now), seconds: false)).monospacedDigit().foregroundStyle(.secondary)
-            if !r.isRunning {
-                Button { Task { await store.start(r.ds, tags: r.tags) } } label: { Image(systemName: "play.fill") }
-                    .buttonStyle(.borderless)
-                    .help("Resume")
-                    .accessibilityLabel("Resume \(r.ds)")
-            }
-        }
-        .font(.callout)
-        .padding(.horizontal, 6)
-        .frame(height: 26)
-        .contentShape(Rectangle())
-        .onTapGesture { editing = r }
-        .help("Click to edit")
-        .contextMenu {
-            Button("Edit…") { editing = r }
-            Button("Resume") { Task { await store.start(r.ds, tags: r.tags) } }
-            if r.isRunning { Button("Stop") { Task { await store.stop(r) } } }
-            TicketLinks(record: r)
-            Divider()
-            Button("Delete", role: .destructive) { Task { await store.delete(r) } }
-        }
-    }
-
+    /// The one rich moment of the popover: the clock that is running.
     private func runningCard(_ r: Record) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label("Tracking", systemImage: "circle.fill")
-                .font(.caption.weight(.semibold)).textCase(.uppercase)
-                .foregroundStyle(.red)
-            HStack(spacing: 14) {
-                Text("Since **\(store.clock(r.t1))** local")
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Circle().fill(.red).frame(width: 6, height: 6).accessibilityLabel("Running")
+                Text("Since \(store.clock(r.t1))")
                 if store.showsWorkZone {
-                    Text("**\(store.clock(r.t1, work: true))** \(store.workZoneName) · work")
+                    Text("·").foregroundStyle(.tertiary)
+                    Text("\(store.clock(r.t1, work: true)) \(store.workZoneName)")
                 }
             }
-            .font(.callout).foregroundStyle(.secondary).monospacedDigit()
+            .font(.caption).foregroundStyle(.secondary).monospacedDigit()
             Text(Store.format(r.duration(now: store.now)))
-                .font(.system(.largeTitle, design: .rounded).weight(.light)).monospacedDigit()
-            Text(r.ds.isEmpty ? "(no description)" : r.ds).font(.headline).lineLimit(2)
-            TagLine(tags: r.tags).font(.callout)
-            HStack(spacing: 8) {
-                Button { Task { await store.stop(r) } } label: {
-                    Label("Stop", systemImage: "stop.fill").frame(maxWidth: .infinity)
+                .font(.system(size: 40, weight: .light, design: .rounded)).monospacedDigit()
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Button { editing = r } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(r.title).font(.headline).lineLimit(2).multilineTextAlignment(.leading)
+                        if !r.extraTags.isEmpty { TagLine(tags: r.extraTags).font(.callout) }
+                    }
                 }
-                .buttonStyle(.borderedProminent).tint(.red)
+                .buttonStyle(.plain)
+                .keyboardShortcut("e", modifiers: .command)
+                .help("Edit (⌘E)")
+                Spacer(minLength: 8)
+                Button { Task { await store.stop(r) } } label: {
+                    Label("Stop", systemImage: "stop.fill")
+                }
+                .controlSize(.large)
                 .keyboardShortcut(".", modifiers: .command)
                 .help("Stop (⌘.)")
-                Button { editing = r } label: { Image(systemName: "pencil") }
-                    .keyboardShortcut("e", modifiers: .command)
-                    .help("Edit current record (⌘E)")
-                    .accessibilityLabel("Edit current record")
             }
+            .padding(.top, 4)
         }
-        .padding(16)
+        .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.background, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     private var idleCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("Not tracking").font(.caption.weight(.semibold)).textCase(.uppercase).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Text("Not tracking")
                 Spacer()
-                Text("**\(store.clock(store.now))** local")
-                if store.showsWorkZone { Text("**\(store.clock(store.now, work: true))** \(store.workZoneName)") }
+                Text(store.clock(store.now))
+                if store.showsWorkZone {
+                    Text("·").foregroundStyle(.tertiary)
+                    Text("\(store.clock(store.now, work: true)) \(store.workZoneName)")
+                }
             }
-            .font(.callout).monospacedDigit()
+            .font(.caption).foregroundStyle(.secondary).monospacedDigit()
             taskField("What are you working on?", icon: nil)
-            Button(action: startDraft) {
-                Label("Start", systemImage: "play.fill").frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty && draftTags.isEmpty)
         }
-        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.background, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     private func taskField(_ prompt: String, icon: String?) -> some View {
@@ -212,7 +192,7 @@ struct MenuView: View {
             }
             .padding(.horizontal, 8)
             .frame(height: 28)
-            .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             TagSuggestions(text: $draftTags, tags: store.tags)
         }
     }
@@ -373,7 +353,7 @@ struct RecordRow: View {
             Text(Self.time(record.t1) + "–" + (record.isRunning ? "now" : Self.time(record.t2)))
                 .font(.caption).monospacedDigit().foregroundStyle(.secondary)
                 .frame(width: 90, alignment: .leading)
-            Text(record.ds.isEmpty ? "(no description)" : record.ds).lineLimit(1)
+            Text(record.title).lineLimit(1)
             TagLine(tags: record.tags)
             Spacer()
             Text(Store.format(record.duration(now: now), seconds: false)).monospacedDigit()
@@ -776,15 +756,164 @@ struct HistoryView: View {
             }
             .monospacedDigit()
             .frame(width: 150, alignment: .leading)
-            Text(r.ds.isEmpty ? "(no description)" : r.ds).lineLimit(2)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(r.title).lineLimit(2)
+                if !r.extraTags.isEmpty { TagLine(tags: r.extraTags).font(.caption) }
+            }
             Spacer()
-            if r.isRunning { Image(systemName: "circle.fill").foregroundStyle(.red).font(.caption2).accessibilityLabel("Running") }
-            Text(Store.format(r.duration(now: store.now), seconds: false)).monospacedDigit()
+            if r.isRunning { Circle().fill(.red).frame(width: 6, height: 6).accessibilityLabel("Running") }
+            Text(Store.format(r.duration(now: store.now), seconds: false)).monospacedDigit().foregroundStyle(.secondary)
         }
         .padding(.vertical, 2)
     }
 
     private func load(_ op: () async throws -> Void) async {
         do { try await op() } catch { store.error = error.localizedDescription }
+    }
+}
+
+extension Record {
+    /// What to call the record: its description, else its ticket tag, else its tags.
+    var title: String {
+        if !ds.trimmingCharacters(in: .whitespaces).isEmpty { return ds }
+        if let t = ticketTag { return t.uppercased() }
+        if !tags.isEmpty { return tags.map { "#" + $0 }.joined(separator: " ") }
+        return "Untitled"
+    }
+
+    /// The first tag that looks like a ticket key, e.g. sm-1114.
+    var ticketTag: String? {
+        tags.first { $0.range(of: #"^[a-z][a-z0-9]*-\d+$"#, options: .regularExpression) != nil }
+    }
+
+    /// Tags not already shown as the title.
+    var extraTags: [String] {
+        if !ds.trimmingCharacters(in: .whitespaces).isEmpty { return tags }
+        if let t = ticketTag { return tags.filter { $0 != t } }
+        return []
+    }
+}
+
+/// The sessions of one task (same description and tags) within a day, newest first.
+struct TaskGroup: Identifiable {
+    let records: [Record]
+    var id: String { records[0].id }
+    var first: Record { records[0] }
+    var isRunning: Bool { records.contains { $0.isRunning } }
+    func total(now: Int) -> Int { records.reduce(0) { $0 + $1.duration(now: now) } }
+
+    /// Keeps the day's order by each task's latest session.
+    static func group(_ records: [Record]) -> [TaskGroup] {
+        var order: [String] = []
+        var map: [String: [Record]] = [:]
+        for r in records {
+            let k = r.ds.lowercased() + "|" + r.tags.sorted().joined(separator: ",")
+            if map[k] == nil { order.append(k) }
+            map[k, default: []].append(r)
+        }
+        return order.map { TaskGroup(records: map[$0]!) }
+    }
+}
+
+/// One task in the day list. Several sessions fold into one row that opens to show them.
+struct TaskGroupRow: View {
+    @EnvironmentObject var store: Store
+    let group: TaskGroup
+    @Binding var editing: Record?
+    @State private var open = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                if group.records.count > 1 {
+                    Button { withAnimation(.easeOut(duration: 0.15)) { open.toggle() } } label: {
+                        Image(systemName: "chevron.right")
+                            .font(.caption2.weight(.semibold))
+                            .rotationEffect(.degrees(open ? 90 : 0))
+                            .frame(width: 12)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.tertiary)
+                    .accessibilityLabel(open ? "Collapse" : "Expand")
+                } else {
+                    Color.clear.frame(width: 12, height: 1)
+                }
+                SessionRow(record: group.first, title: group.first.title,
+                           detail: group.records.count > 1 ? "\(group.records.count) sessions" : store.range(group.first),
+                           duration: group.total(now: store.now), running: group.isRunning,
+                           editing: $editing) {
+                    if group.records.count > 1 { withAnimation(.easeOut(duration: 0.15)) { open.toggle() } } else { editing = group.first }
+                }
+            }
+            if open {
+                ForEach(group.records) { r in
+                    HStack(spacing: 8) {
+                        Color.clear.frame(width: 12, height: 1)
+                        SessionRow(record: r, title: store.range(r), detail: nil,
+                                   duration: r.duration(now: store.now), running: r.isRunning,
+                                   editing: $editing, secondary: true) { editing = r }
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 8)
+    }
+}
+
+/// A row with a title, quiet detail and duration; resume appears on hover.
+struct SessionRow: View {
+    @EnvironmentObject var store: Store
+    let record: Record
+    let title: String
+    let detail: String?
+    let duration: Int
+    let running: Bool
+    @Binding var editing: Record?
+    var secondary = false
+    let tap: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if running { Circle().fill(.red).frame(width: 6, height: 6).accessibilityLabel("Running") }
+            Text(title)
+                .foregroundStyle(secondary ? HierarchicalShapeStyle.secondary : HierarchicalShapeStyle.primary)
+                .monospacedDigit()
+                .lineLimit(1)
+            if let detail {
+                Text(detail).foregroundStyle(.tertiary).monospacedDigit().lineLimit(1)
+            }
+            if !secondary && !record.extraTags.isEmpty {
+                TagLine(tags: record.extraTags).foregroundStyle(.tertiary)
+            }
+            Spacer(minLength: 4)
+            if hover && !record.isRunning {
+                Button { Task { await store.start(record.ds, tags: record.tags) } } label: {
+                    Image(systemName: "play.fill").font(.caption)
+                }
+                .buttonStyle(.borderless)
+                .help("Resume")
+                .accessibilityLabel("Resume \(record.title)")
+            }
+            Text(Store.format(duration, seconds: false))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 36, alignment: .trailing)
+        }
+        .font(.callout)
+        .padding(.horizontal, 4)
+        .frame(height: 28)
+        .background(hover ? Color.primary.opacity(0.06) : .clear, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .contentShape(Rectangle())
+        .onHover { hover = $0 }
+        .onTapGesture(perform: tap)
+        .contextMenu {
+            Button("Edit…") { editing = record }
+            Button("Resume") { Task { await store.start(record.ds, tags: record.tags) } }
+            if record.isRunning { Button("Stop") { Task { await store.stop(record) } } }
+            TicketLinks(record: record)
+            Divider()
+            Button("Delete", role: .destructive) { Task { await store.delete(record) } }
+        }
     }
 }
