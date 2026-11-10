@@ -10,82 +10,80 @@ struct MenuView: View {
     @StateObject private var feed = DayFeed()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if let err = store.error {
-                Label(err, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.secondary).lineLimit(3)
-            }
-            if let u = store.undoable {
-                HStack {
-                    Text(u.label).lineLimit(1).foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Undo") { Task { await store.undo() } }
-                        .keyboardShortcut("z", modifiers: .command)
+        HStack(alignment: .top, spacing: 0) {
+            VStack(alignment: .leading, spacing: 12) {
+                banners
+                if let r = store.running.first {
+                    runningCard(r)
+                    taskField("Switch to…", icon: "arrow.right")
+                } else {
+                    idleCard
                 }
-                .font(.callout)
+                Divider()
+                TagTotals()
+                Spacer(minLength: 0)
+                footer
             }
-            if let u = store.update {
-                Link("TimeTaggerBar \(u.version) is available", destination: u.url).font(.callout)
-            }
-
-            if let r = store.running.first {
-                runningCard(r)
-                taskField("Switch to…", icon: "arrow.right")
-            } else {
-                idleCard
-            }
-
-            daySection
-                .padding(.horizontal, -8)
+            .padding(16)
+            .frame(width: 320)
 
             Divider()
 
-            HStack(spacing: 4) {
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(Store.format(store.todayTotal, seconds: false)).font(.headline).monospacedDigit()
-                    Text(store.showsWorkZone ? "Worked today, \(store.workZoneName)" : "Worked today")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button {
-                    openWindow(id: "history")
-                    NSApp.activate(ignoringOtherApps: true)
-                } label: { Image(systemName: "list.bullet.rectangle") }
-                .keyboardShortcut("y", modifiers: .command)
-                .help("History (⌘Y)")
-                .accessibilityLabel("History")
-                Button {
-                    openWindow(id: "report")
-                    NSApp.activate(ignoringOtherApps: true)
-                } label: { Image(systemName: "tablecells") }
-                .keyboardShortcut("r", modifiers: [.command, .shift])
-                .help("Report (⇧⌘R)")
-                .accessibilityLabel("Report")
-                Menu {
-                    Button("Settings…") {
-                        openWindow(id: "settings")
-                        NSApp.activate(ignoringOtherApps: true)
-                    }
-                    Button("Refresh") { Task { await store.refresh() } }
-                    Divider()
-                    Button("Quit TimeTaggerBar") { NSApp.terminate(nil) }
-                } label: { Image(systemName: "ellipsis.circle") }
-                    .menuStyle(.borderlessButton)
-                    .menuIndicator(.hidden)
-                    .fixedSize()
-                    .help("More")
-                    .accessibilityLabel("More")
-            }
-            .buttonStyle(.borderless)
-            .imageScale(.large)
-            .foregroundStyle(.secondary)
+            daySection
+                .padding(.vertical, 8)
+                .frame(width: 340)
         }
-        .padding(16)
-        .frame(width: 340)
+        .frame(height: 480)
         .sheet(item: $editing) { r in
             EditRecordView(record: r).environmentObject(store)
         }
         // Reload whenever the store has refreshed (a write here or anywhere else).
         .task(id: store.lately.hashValue) { await load { try await feed.reload(store.api) } }
+    }
+
+    @ViewBuilder private var banners: some View {
+        if let err = store.error {
+            Label(err, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.secondary).lineLimit(3)
+        }
+        if let u = store.undoable {
+            HStack {
+                Text(u.label).lineLimit(1).foregroundStyle(.secondary)
+                Spacer()
+                Button("Undo") { Task { await store.undo() } }
+                    .keyboardShortcut("z", modifiers: .command)
+            }
+            .font(.callout)
+        }
+        if let u = store.update {
+            Link("TimeTaggerBar \(u.version) is available", destination: u.url).font(.callout)
+        }
+    }
+
+    private var footer: some View {
+        HStack(spacing: 4) {
+            VStack(alignment: .leading, spacing: 0) {
+                Text(Store.format(store.todayTotal, seconds: false)).font(.headline).monospacedDigit()
+                Text(store.showsWorkZone ? "Worked today, \(store.workZoneName)" : "Worked today")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Menu {
+                Button("Settings…") {
+                    openWindow(id: "settings")
+                    NSApp.activate(ignoringOtherApps: true)
+                }
+                Button("Refresh") { Task { await store.refresh() } }
+                Divider()
+                Button("Quit TimeTaggerBar") { NSApp.terminate(nil) }
+            } label: { Image(systemName: "ellipsis.circle") }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .imageScale(.large)
+                .foregroundStyle(.secondary)
+                .help("More")
+                .accessibilityLabel("More")
+        }
     }
 
     /// Today first, older days below, loading further back as the end scrolls into view.
@@ -118,7 +116,7 @@ struct MenuView: View {
                 }
             }
         }
-        .frame(height: 300)
+        .frame(maxHeight: .infinity)
     }
 
     /// The one rich moment of the popover: the clock that is running.
@@ -344,31 +342,6 @@ struct TagSuggestions: View {
     }
 }
 
-struct RecordRow: View {
-    let record: Record
-    let now: Int
-
-    var body: some View {
-        HStack {
-            Text(Self.time(record.t1) + "–" + (record.isRunning ? "now" : Self.time(record.t2)))
-                .font(.caption).monospacedDigit().foregroundStyle(.secondary)
-                .frame(width: 90, alignment: .leading)
-            Text(record.title).lineLimit(1)
-            TagLine(tags: record.tags)
-            Spacer()
-            Text(Store.format(record.duration(now: now), seconds: false)).monospacedDigit()
-        }
-        .font(.callout)
-    }
-
-    static func time(_ t: Int) -> String {
-        let d = Date(timeIntervalSince1970: TimeInterval(t))
-        let f = DateFormatter()
-        f.dateFormat = Calendar.current.isDateInToday(d) ? "HH:mm" : "E HH:mm"
-        return f.string(from: d)
-    }
-}
-
 struct EditRecordView: View {
     @EnvironmentObject var store: Store
     @Environment(\.dismiss) private var dismiss
@@ -558,220 +531,6 @@ struct SettingsView: View {
     }
 }
 
-struct ReportView: View {
-    @EnvironmentObject var store: Store
-    @State private var options = ReportOptions()
-    @State private var rows: [ReportRow] = []
-    @State private var copied = false
-    @State private var loading = false
-
-    private var builder: ReportBuilder {
-        ReportBuilder(options: options, timeZone: options.workZone ? store.workTimeZone : .current)
-    }
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 0) {
-            Form {
-                Picker("Period", selection: $options.period) {
-                    ForEach(Period.allCases) { Text($0.rawValue).tag($0) }
-                }
-                TextField("Tags", text: $options.tags, prompt: Text("#work"))
-                Picker("Grouping", selection: $options.grouping) {
-                    ForEach(Grouping.allCases) { Text($0.rawValue).tag($0) }
-                }
-                Picker("Group by period", selection: $options.groupPeriod) {
-                    ForEach(GroupPeriod.allCases) { Text($0.rawValue).tag($0) }
-                }
-                Picker("Time zone", selection: $options.workZone) {
-                    Text("Work · \(store.workTimeZoneID)").tag(true)
-                    Text("Local").tag(false)
-                }
-                Picker("Duration", selection: $options.duration) {
-                    ForEach(DurationFormat.allCases) { Text($0.rawValue).tag($0) }
-                }
-                Toggle("Show records", isOn: $options.showRecords)
-                Toggle("Exclude tags", isOn: $options.excludeTags)
-                Toggle("Hide secondary tags", isOn: $options.hideSecondaryTags)
-            }
-            .formStyle(.grouped)
-            .frame(width: 280)
-
-            VStack(alignment: .leading, spacing: 0) {
-                Text("Click any cell to edit it before copying. Edits only change the copied table, not your records.")
-                    .font(.caption).foregroundStyle(.secondary).padding(10)
-                Divider()
-                ScrollView([.vertical, .horizontal]) {
-                    Grid(alignment: .leading, horizontalSpacing: 4, verticalSpacing: 2) {
-                        GridRow {
-                            ForEach(builder.columns, id: \.self) { Text($0).font(.caption.weight(.semibold)).foregroundStyle(.secondary) }
-                            Color.clear.frame(width: 20, height: 1)
-                        }
-                        ForEach($rows) { $row in
-                            GridRow {
-                                ForEach(row.cells.indices, id: \.self) { i in
-                                    TextField("", text: $row.cells[i])
-                                        .textFieldStyle(.plain)
-                                        .fontWeight(row.isHeader ? .semibold : .regular)
-                                        .frame(minWidth: i == row.cells.count - 1 ? 240 : 70)
-                                }
-                                Button { rows.removeAll { $0.id == row.id } } label: { Image(systemName: "xmark") }
-                                    .buttonStyle(.borderless)
-                                    .help("Remove row")
-                                    .accessibilityLabel("Remove row")
-                            }
-                            .padding(.vertical, 3)
-                            .background(row.isHeader ? Color.secondary.opacity(0.08) : .clear)
-                        }
-                    }
-                    .monospacedDigit()
-                    .padding(10)
-                    Button {
-                        rows.append(ReportRow(isHeader: false, cells: Array(repeating: "", count: builder.columns.count)))
-                    } label: { Label("Add Row", systemImage: "plus") }
-                    .buttonStyle(.link)
-                    .padding(.horizontal, 10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
-            .background(.background)
-            .overlay(alignment: .topTrailing) {
-                if loading { ProgressView().controlSize(.small).padding(10) }
-            }
-        }
-        .frame(minWidth: 900, minHeight: 560)
-        .toolbar {
-            ToolbarItem {
-                Button("Reset Edits") { Task { await generate() } }
-                    .help("Discard cell edits and rebuild the table")
-            }
-            ToolbarItem {
-                Button {
-                    ReportBuilder.copy(columns: builder.columns, rows: rows)
-                    copied = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) { copied = false }
-                } label: {
-                    Label(copied ? "Copied" : "Copy Table", systemImage: copied ? "checkmark" : "doc.on.doc")
-                }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut("c", modifiers: [.command, .shift])
-                .help("Copy the table (⇧⌘C)")
-            }
-        }
-        .navigationTitle("Report")
-        .task(id: options) { await generate() }
-    }
-
-    private func generate() async {
-        loading = true
-        defer { loading = false }
-        // The period's days follow the report's time zone (the work zone by default).
-        let (t1, t2) = options.period.range(in: builder.timeZone)
-        do {
-            let recs = try await store.api.records(from: t1, to: t2).filter { !$0.isDeleted }
-            rows = builder.rows(recs, from: t1, to: t2)
-        } catch {
-            store.error = error.localizedDescription
-        }
-    }
-}
-
-struct HistoryView: View {
-    @EnvironmentObject var store: Store
-    @State private var search = ""
-    @State private var editing: Record?
-    @StateObject private var feed = DayFeed()
-    /// Server-side matches for the search, across all time.
-    @State private var found: [Record]?
-
-    var body: some View {
-        let days = found.map(DayFeed.group) ?? feed.days()
-        List {
-            ForEach(days) { day in
-                Section {
-                    ForEach(day.records) { r in
-                        row(r)
-                            .contentShape(Rectangle())
-                            .onTapGesture(count: 2) { editing = r }
-                            .contextMenu {
-                                Button("Edit…") { editing = r }
-                                Button("Resume") { Task { await store.start(r.ds, tags: r.tags) } }
-                                if r.isRunning { Button("Stop") { Task { await store.stop(r) } } }
-                                TicketLinks(record: r)
-                                Divider()
-                                Button("Delete", role: .destructive) { Task { await store.delete(r) } }
-                            }
-                    }
-                } header: {
-                    HStack {
-                        Text(day.id, format: .dateTime.weekday(.wide).day().month(.wide))
-                        Spacer()
-                        Text(Store.format(day.records.reduce(0) { $0 + $1.duration(now: store.now) }, seconds: false))
-                            .monospacedDigit()
-                    }
-                }
-            }
-            // Scrolling to the end reaches further back.
-            if found == nil && !feed.reachedEnd {
-                ProgressView().controlSize(.small).frame(maxWidth: .infinity)
-                    .onAppear { Task { await load { try await feed.loadMore(store.api) } } }
-            }
-        }
-        .overlay {
-            if days.isEmpty && (found != nil || feed.reachedEnd) { Text("No records").foregroundStyle(.secondary) }
-        }
-        .searchable(text: $search, prompt: "Search description or tag")
-        .toolbar {
-            ToolbarItemGroup {
-                Button {
-                    let t = Int(Date().timeIntervalSince1970)
-                    editing = Record(key: Record.newKey(), rev: 0, t1: t - 3600, t2: t, ds: "", deleted: 0)
-                } label: { Label("Add Record", systemImage: "plus") }
-                .keyboardShortcut("n", modifiers: .command)
-                .help("Add a record (⌘N)")
-            }
-        }
-        .navigationTitle("History")
-        .frame(minWidth: 620, minHeight: 480)
-        .sheet(item: $editing) { r in
-            EditRecordView(record: r).environmentObject(store)
-        }
-        .task(id: store.lately.hashValue) { await load { try await feed.reload(store.api) } }
-        .task(id: "\(search)-\(store.lately.hashValue)") {
-            let q = search.trimmingCharacters(in: .whitespaces)
-            guard !q.isEmpty else { found = nil; return }
-            try? await Task.sleep(nanoseconds: 300_000_000)   // let the typing settle
-            guard !Task.isCancelled else { return }
-            await load { found = try await store.api.search(q).filter { !$0.isDeleted } }
-        }
-    }
-
-    private func row(_ r: Record) -> some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(store.clock(r.t1) + "–" + (r.isRunning ? "now" : store.clock(r.t2)))
-                if store.showsWorkZone {
-                    Text(store.clock(r.t1, work: true) + "–" + (r.isRunning ? "now" : store.clock(r.t2, work: true)) + " " + store.workZoneName)
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-            }
-            .monospacedDigit()
-            .frame(width: 150, alignment: .leading)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(r.title).lineLimit(2)
-                if !r.extraTags.isEmpty { TagLine(tags: r.extraTags).font(.caption) }
-            }
-            Spacer()
-            if r.isRunning { Circle().fill(.red).frame(width: 6, height: 6).accessibilityLabel("Running") }
-            Text(Store.format(r.duration(now: store.now), seconds: false)).monospacedDigit().foregroundStyle(.secondary)
-        }
-        .padding(.vertical, 2)
-    }
-
-    private func load(_ op: () async throws -> Void) async {
-        do { try await op() } catch { store.error = error.localizedDescription }
-    }
-}
-
 extension Record {
     /// What to call the record: its description, else its ticket tag, else its tags.
     var title: String {
@@ -783,7 +542,11 @@ extension Record {
 
     /// The first tag that looks like a ticket key, e.g. sm-1114.
     var ticketTag: String? {
-        tags.first { $0.range(of: #"^[a-z][a-z0-9]*-\d+$"#, options: .regularExpression) != nil }
+        tags.first(where: Record.isTicket)
+    }
+
+    static func isTicket(_ tag: String) -> Bool {
+        tag.range(of: #"^[a-z][a-z0-9]*-\d+$"#, options: .regularExpression) != nil
     }
 
     /// Tags not already shown as the title.
@@ -914,6 +677,46 @@ struct SessionRow: View {
             TicketLinks(record: record)
             Divider()
             Button("Delete", role: .destructive) { Task { await store.delete(record) } }
+        }
+    }
+}
+
+/// Today's time per tag, biggest first, as a ranked list with thin bars.
+struct TagTotals: View {
+    @EnvironmentObject var store: Store
+
+    var body: some View {
+        let totals = store.totalsByTag
+        let top = totals.first?.1 ?? 1
+        VStack(alignment: .leading, spacing: 8) {
+            Text("By tag today").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+            if totals.isEmpty {
+                Text("Nothing tracked yet").font(.callout).foregroundStyle(.tertiary)
+            } else {
+                ScrollView {
+                    VStack(spacing: 8) {
+                        ForEach(totals, id: \.0) { tag, secs in
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Text(Record.isTicket(tag) ? tag.uppercased() : "#" + tag)
+                                        .lineLimit(1)
+                                    Spacer()
+                                    Text(Store.format(secs, seconds: false)).monospacedDigit().foregroundStyle(.secondary)
+                                }
+                                .font(.callout)
+                                GeometryReader { g in
+                                    Capsule().fill(Color.primary.opacity(0.08))
+                                        .overlay(alignment: .leading) {
+                                            Capsule().fill(Color.accentColor.opacity(tag == totals.first?.0 ? 0.9 : 0.45))
+                                                .frame(width: max(4, g.size.width * CGFloat(secs) / CGFloat(top)))
+                                        }
+                                }
+                                .frame(height: 4)
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
