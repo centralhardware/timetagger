@@ -166,6 +166,11 @@ final class Store: ObservableObject {
     }
 
     /// Short name of the work time zone's city ("Europe/London" → "London").
+    /// "16:00–16:58", or "23:48–now" while running.
+    func range(_ r: Record) -> String {
+        clock(r.t1) + "–" + (r.isRunning ? "now" : clock(r.t2))
+    }
+
     var workZoneName: String {
         workTimeZoneID.split(separator: "/").last.map { $0.replacingOccurrences(of: "_", with: " ") } ?? workTimeZoneID
     }
