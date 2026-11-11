@@ -198,7 +198,7 @@ final class Store: ObservableObject {
 
     var totalsByTag: [(String, Int)] {
         var sums: [String: Int] = [:]
-        let (p1, p2) = period.range
+        let (p1, p2) = period.range(in: workTimeZone)
         for r in records {
             let t1 = max(r.t1, p1), t2 = min(r.isRunning ? now : r.t2, p2)
             guard t2 > t1 else { continue }
@@ -209,14 +209,14 @@ final class Store: ObservableObject {
     }
 
     var total: Int {
-        let (p1, p2) = period.range
+        let (p1, p2) = period.range(in: workTimeZone)
         return records.reduce(0) { $0 + max(0, min($1.isRunning ? now : $1.t2, p2) - max($1.t1, p1)) }
     }
 
     func refresh() async {
         guard signedIn else { return }
         do {
-            let (t1, t2) = period.range
+            let (t1, t2) = period.range(in: workTimeZone)
             records = try await api.records(from: t1, to: t2)
                 .filter { !$0.isDeleted }
                 .sorted { $0.t1 > $1.t1 }
@@ -264,7 +264,8 @@ final class Store: ObservableObject {
     /// A notification when nothing is tracked during working hours on a weekday, at most every 30 minutes.
     private func nagIfIdle() {
         guard remindIdle, signedIn, running.isEmpty else { return }
-        let cal = Calendar.current
+        var cal = Calendar.current
+        cal.timeZone = workTimeZone
         let date = Date(timeIntervalSince1970: TimeInterval(now))
         let hour = cal.component(.hour, from: date)
         guard !cal.isDateInWeekend(date), hour >= workStartHour, hour < workEndHour else { return }
