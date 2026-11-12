@@ -21,6 +21,9 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
     let store = Store()
     /// The torn-off window, while there is one.
     private var window: NSWindow?
+    /// When the popover last closed. A click on the icon first closes a transient popover
+    /// (it counts as a click outside) and then fires the action; this keeps it from reopening.
+    private var closedAt = Date.distantPast
     private var item: NSStatusItem!
     private let popover = NSPopover()
     private var watch: AnyCancellable?
@@ -60,11 +63,17 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
             NSApp.activate(ignoringOtherApps: true)
         } else if popover.isShown {
             popover.performClose(nil)
+        } else if Date().timeIntervalSince(closedAt) < 0.3 {
+            return
         } else if let button = item.button {
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             popover.contentViewController?.view.window?.makeKey()
             NSApp.activate(ignoringOtherApps: true)
         }
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        closedAt = Date()
     }
 
     /// Tears the popover off into a normal window, moved by `offset` from where the popover was
