@@ -125,7 +125,7 @@ struct MenuView: View {
     /// Within a day, rows run strictly by time; back-to-back sessions of one task fold into one row.
     private var daySection: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: .sectionHeaders) {
+            LazyVStack(alignment: .leading, spacing: 0) {
                 if feed.reachedEnd && feed.records.isEmpty {
                     Text("No history yet. Start a task on the left and it shows up here.")
                         .font(.callout).foregroundStyle(.tertiary).padding(16)
@@ -169,8 +169,10 @@ struct MenuView: View {
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 8)
-                        .frame(height: 24)
-                        .background(.bar)
+                        .padding(.top, 10)
+                        .frame(height: 34)
+                        // No band of its own: a quiet label on the popover's own background.
+                        .overlay(alignment: .top) { Divider().opacity(day.id == feed.days().first?.id ? 0 : 1) }
                         .contentShape(Rectangle())
                         .onTapGesture {
                             guard !store.workCalendar.isDateInToday(day.id) else { return }
