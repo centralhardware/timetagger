@@ -140,19 +140,16 @@ struct MenuView: View {
                                 if i + 1 < groups.count { GapRow(newer: g, older: groups[i + 1]) }
                             }
                         } else {
-                            // Past days: time per tag; the full log opens from the header.
-                            ForEach(Self.tagTotals(day.records).map { ("\(day.id.timeIntervalSince1970)|\($0.0)", $0.0, $0.1) }, id: \.0) { _, tag, secs in
-                                HStack {
-                                    Text(tag == "untagged" ? "Untagged" : tag == tag.uppercased() ? tag : "#" + tag).lineLimit(1)
-                                    Spacer()
-                                    Text(Store.format(secs, seconds: false)).monospacedDigit().foregroundStyle(.secondary)
-                                }
-                                .font(.callout)
-                                .padding(.leading, 28).padding(.trailing, 12)
-                                .frame(height: 26)
+                            // Past days fold to one quiet line: "SM-992 4:04 · CORE-2517 3:07 · #call 0:20".
+                            Text(Self.tagTotals(day.records).map { tag, secs in
+                                (tag == "untagged" ? "Untagged" : tag == tag.uppercased() ? tag : "#" + tag) + " " + Store.format(secs, seconds: false)
+                            }.joined(separator: "  ·  "))
+                                .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                                .lineLimit(2)
+                                .padding(.leading, 28).padding(.trailing, 12).padding(.bottom, 6)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                                 .contentShape(Rectangle())
                                 .onTapGesture { expandedDays.insert(day.id) }
-                            }
                         }
                     } header: {
                         HStack(spacing: 6) {
@@ -585,7 +582,7 @@ struct TimePicker: View {
 
     /// Keeps the time at or before `latest` (a running record can't start in the future).
     private var clamped: Binding<Date> {
-        Binding(get: { time }, set: { time = latest.map { l in min($0, l) } ?? $0 })
+        Binding(get: { time }, set: { new in time = latest.map { min(new, $0) } ?? new })
     }
 }
 
@@ -873,7 +870,8 @@ struct SessionRow: View {
                 .monospacedDigit()
                 .lineLimit(1)
             if let detail {
-                Text(detail).foregroundStyle(.tertiary).monospacedDigit().lineLimit(1)
+                // The time range gives way first, so the description stays readable.
+                Text(detail).foregroundStyle(.tertiary).monospacedDigit().lineLimit(1).layoutPriority(-1)
             }
             if !secondary && !record.extraTags.isEmpty {
                 TagLine(tags: record.extraTags).foregroundStyle(.tertiary)
