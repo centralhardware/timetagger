@@ -140,16 +140,35 @@ struct MenuView: View {
                                 if i + 1 < groups.count { GapRow(newer: g, older: groups[i + 1]) }
                             }
                         } else {
-                            // Past days fold to one quiet line: "SM-992 4:04 · CORE-2517 3:07 · #call 0:20".
-                            Text(Self.tagTotals(day.records).map { tag, secs in
-                                (tag == "untagged" ? "Untagged" : tag == tag.uppercased() ? tag : "#" + tag) + " " + Store.format(secs, seconds: false)
-                            }.joined(separator: "  ·  "))
-                                .font(.caption).foregroundStyle(.secondary).monospacedDigit()
-                                .lineLimit(2)
-                                .padding(.leading, 28).padding(.trailing, 12).padding(.bottom, 6)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .contentShape(Rectangle())
-                                .onTapGesture { expandedDays.insert(day.id) }
+                            // Past days fold to one stacked bar of tickets/tags with a short legend.
+                            let totals = Self.tagTotals(day.records)
+                            let sum = CGFloat(max(1, totals.reduce(0) { $0 + $1.1 }))
+                            VStack(alignment: .leading, spacing: 4) {
+                                GeometryReader { g in
+                                    HStack(spacing: 1) {
+                                        ForEach(totals, id: \.0) { key, secs in
+                                            Rectangle().fill(Color.forKey(key == key.uppercased() ? key : "#" + key))
+                                                .frame(width: max(2, g.size.width * CGFloat(secs) / sum - 1))
+                                                .help("\(key) \(Store.format(secs, seconds: false))")
+                                        }
+                                    }
+                                    .clipShape(Capsule())
+                                }
+                                .frame(height: 6)
+                                HStack(spacing: 10) {
+                                    ForEach(totals.prefix(4), id: \.0) { key, secs in
+                                        HStack(spacing: 4) {
+                                            Circle().fill(Color.forKey(key == key.uppercased() ? key : "#" + key)).frame(width: 6, height: 6)
+                                            Text("\(key == "untagged" ? "Untagged" : key == key.uppercased() ? key : "#" + key) \(Store.format(secs, seconds: false))")
+                                        }
+                                    }
+                                }
+                                .font(.caption).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
+                            }
+                            .padding(.leading, 28).padding(.trailing, 12).padding(.bottom, 8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                            .onTapGesture { expandedDays.insert(day.id) }
                         }
                     } header: {
                         HStack(spacing: 6) {
@@ -756,9 +775,14 @@ extension Record {
     var extraTags: [String] { tags }
 
     /// The ticket shown before the title, unless the title already is the ticket.
-    var ticketBadge: String? {
-        guard let t = ticket, !ds.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
-        return t
+    /// Always a badge, so a ticket-only row lines up with the rest instead of standing out.
+    var ticketBadge: String? { ticket }
+
+    /// The row's text next to the badge: the description, else the tags, else nothing.
+    var rowText: String {
+        if !ds.trimmingCharacters(in: .whitespaces).isEmpty { return ds }
+        if ticket != nil { return tags.map { "#" + $0 }.joined(separator: " ") }
+        return title
     }
 }
 
@@ -770,64 +794,52 @@ struct TaskGroup: Identifiable {
     var isRunning: Bool { records.contains { $0.isRunning } }
     func total(now: Int) -> Int { records.reduce(0) { $0 + $1.duration(now: now) } }
 
-    /// Strictly chronological: only back-to-back sessions of the same task fold together,
-    /// so a task picked up again later in the day shows up again at that time.
+    /// Every record is its own row. Only sessions of the same task that run straight into
+    /// each other (a minute or less apart) are kept together, as a mergeable block.
     static func group(_ records: [Record]) -> [TaskGroup] {
-        let key = { (r: Record) in r.taskKey }
         var runs: [[Record]] = []
-        for r in records {
-            if let last = runs.last?.last, key(last) == key(r) { runs[runs.count - 1].append(r) } else { runs.append([r]) }
+        for r in records {   // newest first
+            if let newer = runs.last?.last, newer.taskKey == r.taskKey, !r.isRunning, newer.t1 - r.t2 <= 60, newer.t1 >= r.t2 - 60 {
+                runs[runs.count - 1].append(r)
+            } else {
+                runs.append([r])
+            }
         }
         return runs.map { TaskGroup(records: $0) }
     }
 }
 
-/// One task in the day list. Several sessions fold into one row that opens to show them.
+/// One row per record. Back-to-back sessions of one task sit in a shared block with a Merge button.
 struct TaskGroupRow: View {
     @EnvironmentObject var store: Store
     let group: TaskGroup
     @Binding var editing: Record?
-    @State private var open = false
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                if group.records.count > 1 {
-                    Button { withAnimation(.easeOut(duration: 0.15)) { open.toggle() } } label: {
-                        Image(systemName: "chevron.right")
-                            .font(.caption2.weight(.semibold))
-                            .rotationEffect(.degrees(open ? 90 : 0))
-                            .frame(width: 12)
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.tertiary)
-                    .accessibilityLabel(open ? "Collapse" : "Expand")
-                } else {
-                    Color.clear.frame(width: 12, height: 1)
-                }
-                SessionRow(record: group.first, title: group.first.title,
-                           detail: group.records.count > 1 ? "\(group.records.count) sessions" : store.range(group.first),
-                           duration: group.total(now: store.now), running: group.isRunning,
-                           editing: $editing, editsInline: group.records.count == 1) {
-                    if group.records.count > 1 { withAnimation(.easeOut(duration: 0.15)) { open.toggle() } } else { editing = editing?.id == group.first.id ? nil : group.first }
-                }
+            ForEach(group.records) { r in
+                SessionRow(record: r, title: r.rowText, detail: store.range(r),
+                           duration: r.duration(now: store.now), running: r.isRunning,
+                           editing: $editing) { editing = editing?.id == r.id ? nil : r }
             }
-            if open {
-                ForEach(group.records) { r in
-                    HStack(spacing: 8) {
-                        Color.clear.frame(width: 12, height: 1)
-                        SessionRow(record: r, title: store.range(r), detail: nil,
-                                   duration: r.duration(now: store.now), running: r.isRunning,
-                                   editing: $editing, secondary: true) { editing = editing?.id == r.id ? nil : r }
-                    }
+            if group.records.count > 1 {
+                HStack {
+                    Text("\(group.records.count) back-to-back sessions · \(Store.format(group.total(now: store.now), seconds: false))")
+                    Spacer()
+                    Button("Merge") { Task { await store.merge(group.records) } }
+                        .buttonStyle(.borderless)
+                        .help("Join them into one record")
                 }
+                .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                .padding(.horizontal, 8).frame(height: 22)
+            }
+        }
+        .background {
+            if group.records.count > 1 {
+                RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.primary.opacity(0.05))
             }
         }
         .padding(.horizontal, 8)
-        // Editing a folded session opens the group so its editor is visible.
-        .onChange(of: editing?.id) { id in
-            if let id, group.records.count > 1, group.records.contains(where: { $0.id == id }) { open = true }
-        }
     }
 }
 
@@ -859,6 +871,7 @@ struct SessionRow: View {
 
     private var row: some View {
         HStack(spacing: 8) {
+            RoundedRectangle(cornerRadius: 1.5).fill(record.taskColor).frame(width: 3, height: 16)
             if running { Circle().fill(.red).frame(width: 6, height: 6).accessibilityLabel("Running") }
             if !secondary, let t = record.ticketBadge {
                 Text(t).font(.caption.monospaced()).foregroundStyle(.secondary)
@@ -873,7 +886,7 @@ struct SessionRow: View {
                 // The time range gives way first, so the description stays readable.
                 Text(detail).foregroundStyle(.tertiary).monospacedDigit().lineLimit(1).layoutPriority(-1)
             }
-            if !secondary && !record.extraTags.isEmpty {
+            if !secondary && !record.extraTags.isEmpty && !record.ds.trimmingCharacters(in: .whitespaces).isEmpty {
                 TagLine(tags: record.extraTags).foregroundStyle(.tertiary)
             }
             Spacer(minLength: 4)
@@ -967,7 +980,7 @@ struct TagTotals: View {
                         GeometryReader { g in
                             Capsule().fill(Color.primary.opacity(0.08))
                                 .overlay(alignment: .leading) {
-                                    Capsule().fill(Color.accentColor.opacity(key == totals.first?.0 ? 0.9 : 0.45))
+                                    Capsule().fill(Color.forKey(ticket ? key : "#" + key))
                                         .frame(width: max(4, g.size.width * CGFloat(secs) / CGFloat(top)))
                                 }
                         }
@@ -1139,13 +1152,9 @@ extension Record {
         ([ticket ?? "", ds] + tags.map { "#" + $0 }).filter { !$0.isEmpty }.joined(separator: " ")
     }
 
-    /// A stable colour per task (description + tags), so the same task looks the same everywhere.
-    var taskColor: Color {
-        let key = taskKey
-        var h: UInt32 = 2166136261
-        for b in key.utf8 { h = (h ^ UInt32(b)) &* 16777619 }
-        return Color(hue: Double(h % 360) / 360, saturation: 0.55, brightness: 0.85)
-    }
+    /// The record's colour: its ticket's, else its task's, so a ticket looks the same in the
+    /// timeline, the history and the totals.
+    var taskColor: Color { Color.forKey(ticket ?? taskKey) }
 }
 
 /// The running task's text as an always-editable field; Return saves.
@@ -1182,5 +1191,14 @@ struct RunningText: View {
         r.ticket = ticket
         r.tags = e.tags
         Task { await store.update(r) }
+    }
+}
+
+extension Color {
+    /// A stable colour for a ticket, "#tag" or task key.
+    static func forKey(_ key: String) -> Color {
+        var h: UInt32 = 2166136261
+        for b in key.utf8 { h = (h ^ UInt32(b)) &* 16777619 }
+        return Color(hue: Double(h % 360) / 360, saturation: 0.55, brightness: 0.85)
     }
 }

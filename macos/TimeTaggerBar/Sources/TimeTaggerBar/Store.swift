@@ -385,6 +385,15 @@ final class Store: ObservableObject {
         await save([r], label: "Adjusted \u{201C}\(record.title)\u{201D}", before: [record])
     }
 
+    /// Joins back-to-back sessions into the earliest one, which then runs to the latest end.
+    func merge(_ recs: [Record]) async {
+        let sorted = recs.sorted { $0.t1 < $1.t1 }
+        guard var first = sorted.first, let last = sorted.last, sorted.count > 1 else { return }
+        first.t2 = last.isRunning ? first.t1 : last.t2
+        let gone = sorted.dropFirst().map { r -> Record in var r = r; r.deleted = 1; return r }
+        await save([first] + gone, label: "Merged \(sorted.count) sessions", before: sorted)
+    }
+
     func update(_ record: Record) async {
         await save([record], label: "Edited", before: (lately + records).filter { $0.key == record.key })
     }
