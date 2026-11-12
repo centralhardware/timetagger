@@ -20,7 +20,13 @@ struct MenuView: View {
                 } else if let r = store.running.first {
                     runningCard(r)
                     if switching {
-                        taskField("Switch to…", icon: "arrow.right")
+                        HStack(alignment: .top, spacing: 6) {
+                            taskField("Switch to…", icon: "arrow.right")
+                            Button { switching = false; draft = "" } label: { Image(systemName: "xmark.circle.fill") }
+                                .buttonStyle(.borderless).foregroundStyle(.tertiary).frame(height: 28)
+                                .keyboardShortcut(.cancelAction)
+                                .help("Close (Esc)")
+                        }
                     } else {
                         Button { switching = true; fieldFocused = true } label: {
                             Label("Switch to…", systemImage: "arrow.right")
@@ -41,6 +47,10 @@ struct MenuView: View {
             }
             .padding(16)
             .frame(width: 320)
+            // Drag the left column away (like a Calendar popover) to keep it as a window.
+            .gesture(DragGesture(minimumDistance: 40).onEnded { v in
+                StatusBarController.shared?.popOut(offset: v.translation)
+            })
 
             Divider()
 
@@ -50,9 +60,14 @@ struct MenuView: View {
         }
         .frame(height: 480)
         // Opening the popover puts the cursor in the task field: type and press Return.
-        .onAppear { fieldFocused = true }
+        .onAppear { if store.running.isEmpty { fieldFocused = true } }
         // Reload whenever the store has refreshed (a write here or anywhere else).
-        .task(id: store.lately.hashValue) { await load { try await feed.reload(store.api) } }
+        .task(id: store.lately.hashValue) {
+            feed.calendar = store.workCalendar
+            await load { try await feed.reload(store.api) }
+        }
+        // A popover reopened later starts clean: no half-typed switch left open.
+        .onDisappear { switching = false; draft = ""; editing = nil }
     }
 
     @ViewBuilder private var banners: some View {
@@ -91,6 +106,7 @@ struct MenuView: View {
                 Button("Settings…") {
                     openSettings()
                 }
+                Button("Open as Window") { StatusBarController.shared?.popOut() }
                 Button("Refresh") { Task { await store.refresh() } }
                 Divider()
                 Button("Quit TimeTaggerBar") { NSApp.terminate(nil) }
@@ -109,13 +125,13 @@ struct MenuView: View {
     /// Within a day, rows run strictly by time; back-to-back sessions of one task fold into one row.
     private var daySection: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: .sectionHeaders) {
+            LazyVStack(alignment: .leading, spacing: 0) {
                 if feed.reachedEnd && feed.records.isEmpty {
                     Text("No history yet. Start a task on the left and it shows up here.")
                         .font(.callout).foregroundStyle(.tertiary).padding(16)
                 }
                 ForEach(feed.days()) { day in
-                    let detailed = Calendar.current.isDateInToday(day.id) || expandedDays.contains(day.id)
+                    let detailed = store.workCalendar.isDateInToday(day.id) || expandedDays.contains(day.id)
                     Section {
                         if detailed {
                             let groups = TaskGroup.group(day.records)
@@ -124,28 +140,25 @@ struct MenuView: View {
                                 if i + 1 < groups.count { GapRow(newer: g, older: groups[i + 1]) }
                             }
                         } else {
-                            // Past days: time per tag; the full log opens from the header.
-                            ForEach(Self.tagTotals(day.records), id: \.0) { tag, secs in
-                                HStack {
-                                    Text(tag == "untagged" ? "Untagged" : tag == tag.uppercased() ? tag : "#" + tag).lineLimit(1)
-                                    Spacer()
-                                    Text(Store.format(secs, seconds: false)).monospacedDigit().foregroundStyle(.secondary)
-                                }
-                                .font(.callout)
-                                .padding(.leading, 28).padding(.trailing, 12)
-                                .frame(height: 26)
+                            // Past days fold to one quiet line: "SM-992 4:04 · CORE-2517 3:07 · #call 0:20".
+                            Text(Self.tagTotals(day.records).map { tag, secs in
+                                (tag == "untagged" ? "Untagged" : tag == tag.uppercased() ? tag : "#" + tag) + " " + Store.format(secs, seconds: false)
+                            }.joined(separator: "  ·  "))
+                                .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                                .lineLimit(2)
+                                .padding(.leading, 28).padding(.trailing, 12).padding(.bottom, 6)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                                 .contentShape(Rectangle())
                                 .onTapGesture { expandedDays.insert(day.id) }
-                            }
                         }
                     } header: {
                         HStack(spacing: 6) {
-                            if !Calendar.current.isDateInToday(day.id) {
+                            if !store.workCalendar.isDateInToday(day.id) {
                                 Image(systemName: "chevron.right")
                                     .font(.caption2.weight(.semibold))
                                     .rotationEffect(.degrees(detailed ? 90 : 0))
                             }
-                            Text(Calendar.current.isDateInToday(day.id) ? "Today" : day.id.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated)))
+                            Text(store.workCalendar.isDateInToday(day.id) ? "Today" : day.id.formatted(Date.FormatStyle(timeZone: store.workTimeZone).weekday(.abbreviated).day().month(.abbreviated)))
                             Spacer()
                             Text(Store.format(day.records.reduce(0) { $0 + $1.duration(now: store.now) }, seconds: false))
                                 .monospacedDigit()
@@ -153,11 +166,13 @@ struct MenuView: View {
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 8)
-                        .frame(height: 24)
-                        .background(.bar)
+                        .padding(.top, 10)
+                        .frame(height: 34)
+                        // No band of its own: a quiet label on the popover's own background.
+                        .overlay(alignment: .top) { Divider().opacity(day.id == feed.days().first?.id ? 0 : 1) }
                         .contentShape(Rectangle())
                         .onTapGesture {
-                            guard !Calendar.current.isDateInToday(day.id) else { return }
+                            guard !store.workCalendar.isDateInToday(day.id) else { return }
                             withAnimation(.easeOut(duration: 0.15)) {
                                 if expandedDays.contains(day.id) { expandedDays.remove(day.id) } else { expandedDays.insert(day.id) }
                             }
@@ -174,31 +189,39 @@ struct MenuView: View {
     }
 
     /// The one rich moment of the popover: the clock that is running.
+    /// The running task first: ticket and description lead, the clock is supporting detail.
     private func runningCard(_ r: Record) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Circle().fill(.red).frame(width: 6, height: 6).accessibilityLabel("Running")
-                Text("Since")
-                RunningStart(record: r)
-                if store.showsWorkZone {
-                    Text("·").foregroundStyle(.tertiary)
-                    Text("\(store.clock(r.t1, work: true)) \(store.workZoneName)")
+                if let t = r.ticket {
+                    Text(t).font(.caption.monospaced().weight(.semibold))
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(Color.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                } else {
+                    Text("Now").font(.caption.weight(.medium)).foregroundStyle(.secondary)
                 }
             }
-            .font(.caption).foregroundStyle(.secondary).monospacedDigit()
-            Text(Store.format(r.duration(now: store.now)))
-                .font(.system(size: 40, weight: .light, design: .rounded)).monospacedDigit()
+            RunningText(record: r)
+                .frame(maxWidth: .infinity, alignment: .leading)
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                RunningText(record: r)
+                Text(Store.format(r.duration(now: store.now)))
+                    .font(.system(.title2, design: .rounded).weight(.light)).monospacedDigit()
+                HStack(spacing: 4) {
+                    Text("since")
+                    RunningStart(record: r)
+                    if store.showsWorkZone {
+                        Text("· \(store.clock(r.t1, work: true)) \(store.workZoneName)")
+                    }
+                }
+                .font(.caption).foregroundStyle(.secondary).monospacedDigit()
                 Spacer(minLength: 8)
                 Button { Task { await store.stop(r) } } label: {
                     Label("Stop", systemImage: "stop.fill")
                 }
-                .controlSize(.large)
                 .keyboardShortcut(".", modifiers: .command)
                 .help("Stop (⌘.)")
             }
-            .padding(.top, 4)
         }
         .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -413,6 +436,7 @@ struct InlineEditor: View {
     @EnvironmentObject var store: Store
     let original: Record
     let close: () -> Void
+    @State private var ticket: String
     @State private var text: String
     @State private var start: Date
     @State private var end: Date
@@ -423,7 +447,8 @@ struct InlineEditor: View {
         original = record
         self.close = close
         let s = Date(timeIntervalSince1970: TimeInterval(record.t1))
-        _text = State(initialValue: record.editText)
+        _ticket = State(initialValue: record.ticket ?? "")
+        _text = State(initialValue: ([record.ds] + record.tags.map { "#" + $0 }).filter { !$0.isEmpty }.joined(separator: " "))
         _start = State(initialValue: s)
         _end = State(initialValue: record.isRunning ? Date() : Date(timeIntervalSince1970: TimeInterval(record.t2)))
         _running = State(initialValue: record.isRunning)
@@ -432,17 +457,23 @@ struct InlineEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            field { TextField("Description #tags", text: $text).textFieldStyle(.plain).onSubmit(save) }
-            HashSuggestions(text: $text, tags: store.tags)
+            // Ticket and text are separate fields, as they are on the server.
             HStack(spacing: 6) {
-                DatePicker("Day", selection: $start, displayedComponents: .date)
-                    .labelsHidden().datePickerStyle(.field)
+                field {
+                    TextField("Ticket", text: $ticket, prompt: Text("SM-1234")).textFieldStyle(.plain).onSubmit(save)
+                        .font(.callout.monospaced())
+                }
+                .frame(width: 110)
+                field { TextField("What was done #tags", text: $text).textFieldStyle(.plain).onSubmit(save) }
+            }
+            HashSuggestions(text: $text, tags: store.tags)
+            HStack(spacing: 8) {
+                TimeRow(label: "Start", time: $start, showsDate: true)
                 Spacer()
                 if canRun { Toggle("Running", isOn: $running).toggleStyle(.checkbox) }
             }
-            TimeRow(label: "Start", time: $start)
             if !running {
-                TimeRow(label: "End", time: $end)
+                TimeRow(label: "End", time: $end, showsDate: !Calendar.current.isDate(end, inSameDayAs: start))
             }
             HStack {
                 if invalid {
@@ -479,15 +510,19 @@ struct InlineEditor: View {
         original.isRunning || !(store.lately + store.records).contains { !$0.isDeleted && $0.key != original.key && $0.t1 > original.t1 }
     }
 
-    /// A finished record whose end isn't after its start can't be saved.
-    private var invalid: Bool { !running && end <= start }
+    /// A finished record whose end isn't after its start can't be saved, nor a ticket that isn't a key.
+    private var invalid: Bool {
+        let t = ticket.trimmingCharacters(in: .whitespaces).lowercased()
+        return (!running && end <= start) || (!t.isEmpty && !Record.isTicket(t))
+    }
 
     private func save() {
         guard !invalid else { return }
         var r = original
         let e = QuickEntry.parse(text)
+        let typed = ticket.trimmingCharacters(in: .whitespaces).uppercased()
         r.ds = e.ds
-        r.ticket = e.ticket
+        r.ticket = typed.isEmpty ? e.ticket : typed
         r.tags = e.tags
         r.t1 = Int(start.timeIntervalSince1970)
         r.t2 = running ? r.t1 : Int(end.timeIntervalSince1970)
@@ -500,21 +535,54 @@ struct InlineEditor: View {
 struct TimeRow: View {
     let label: String
     @Binding var time: Date
+    var showsDate = false
 
     var body: some View {
         HStack(spacing: 6) {
             Text(label).foregroundStyle(.secondary).frame(width: 36, alignment: .leading)
-            HStack(spacing: 6) {
-                DatePicker(label, selection: $time, displayedComponents: .hourAndMinute)
-                    .labelsHidden()
-                    .datePickerStyle(.field)
-                Button("−5") { time = time.addingTimeInterval(-300) }.help("5 minutes earlier")
-                Button("+5") { time = time.addingTimeInterval(300) }.help("5 minutes later")
-                Button("Now") { time = Date() }
+            TimePicker(time: $time, showsDate: showsDate)
+        }
+    }
+}
+
+/// A time as a button, like Calendar's event times: click it for a calendar and a clock face.
+struct TimePicker: View {
+    @Binding var time: Date
+    var latest: Date? = nil
+    var showsDate = false
+    @State private var open = false
+
+    var body: some View {
+        Button { open.toggle() } label: {
+            Group {
+                if showsDate {
+                    Text(time, format: .dateTime.day().month(.abbreviated).hour().minute())
+                } else {
+                    Text(time, format: .dateTime.hour().minute())
+                }
             }
-            .controlSize(.small)
             .monospacedDigit()
         }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .popover(isPresented: $open, arrowEdge: .bottom) {
+            HStack(alignment: .top, spacing: 12) {
+                DatePicker("", selection: clamped, displayedComponents: .date)
+                    .datePickerStyle(.graphical).labelsHidden()
+                VStack(spacing: 8) {
+                    DatePicker("", selection: clamped, displayedComponents: .hourAndMinute)
+                        .datePickerStyle(.graphical).labelsHidden()
+                    DatePicker("", selection: clamped, displayedComponents: .hourAndMinute)
+                        .datePickerStyle(.stepperField).labelsHidden().fixedSize()
+                }
+            }
+            .padding(12)
+        }
+    }
+
+    /// Keeps the time at or before `latest` (a running record can't start in the future).
+    private var clamped: Binding<Date> {
+        Binding(get: { time }, set: { new in time = latest.map { min(new, $0) } ?? new })
     }
 }
 
@@ -802,7 +870,8 @@ struct SessionRow: View {
                 .monospacedDigit()
                 .lineLimit(1)
             if let detail {
-                Text(detail).foregroundStyle(.tertiary).monospacedDigit().lineLimit(1)
+                // The time range gives way first, so the description stays readable.
+                Text(detail).foregroundStyle(.tertiary).monospacedDigit().lineLimit(1).layoutPriority(-1)
             }
             if !secondary && !record.extraTags.isEmpty {
                 TagLine(tags: record.extraTags).foregroundStyle(.tertiary)
@@ -968,7 +1037,7 @@ struct DayTimeline: View {
     @Binding var editing: Record?
 
     var body: some View {
-        let start = Int(Calendar.current.startOfDay(for: Date()).timeIntervalSince1970)
+        let start = Int(store.workCalendar.startOfDay(for: Date()).timeIntervalSince1970)
         let recs = store.lately.filter { !$0.isDeleted && ($0.isRunning ? store.now : $0.t2) > start }
         if let first = recs.map({ max($0.t1, start) }).min() {
             let span = CGFloat(max(store.now - first, 60))
@@ -981,7 +1050,8 @@ struct DayTimeline: View {
                             RoundedRectangle(cornerRadius: 2)
                                 .fill(r.taskColor)
                                 .overlay(r.isRunning ? RoundedRectangle(cornerRadius: 2).stroke(Color.red, lineWidth: 1) : nil)
-                                .frame(width: max(2, (b - a) / span * g.size.width))
+                                // A 1 pt gap keeps back-to-back segments apart.
+                                .frame(width: max(2, (b - a) / span * g.size.width - 1))
                                 .offset(x: a / span * g.size.width)
                                 .help("\(r.title) \(store.range(r))")
                                 .onTapGesture { editing = editing?.id == r.id ? nil : r }
@@ -1031,14 +1101,11 @@ struct RunningStart: View {
     @State private var start = Date()
 
     var body: some View {
-        DatePicker("Start", selection: $start, in: ...Date(), displayedComponents: .hourAndMinute)
-            .labelsHidden()
-            .datePickerStyle(.field)
-            .fixedSize()
-            .help("Edit the start time")
+        TimePicker(time: $start, latest: Date())
+            .help("Change the start time")
             .onAppear { start = Date(timeIntervalSince1970: TimeInterval(record.t1)) }
             .onChange(of: record.t1) { t in start = Date(timeIntervalSince1970: TimeInterval(t)) }
-            // Debounced so typing "14:30" doesn't save 1, 14, 14:3 along the way.
+            // Debounced so clicking through the picker saves once, at the end.
             .task(id: start) {
                 try? await Task.sleep(nanoseconds: 900_000_000)
                 guard !Task.isCancelled else { return }
@@ -1053,6 +1120,11 @@ struct RunningStart: View {
 }
 
 extension Record {
+    /// Description with "#tag" text at the end, without the ticket.
+    var textWithTags: String {
+        ([ds] + tags.map { "#" + $0 }).filter { !$0.isEmpty }.joined(separator: " ")
+    }
+
     /// Description with tags at the end as plain "#tag" text: the one-field form used for editing.
     var editText: String {
         ([ticket ?? "", ds] + tags.map { "#" + $0 }).filter { !$0.isEmpty }.joined(separator: " ")
@@ -1078,12 +1150,12 @@ struct RunningText: View {
         VStack(alignment: .leading, spacing: 4) {
             TextField("What are you working on? #tags", text: $text, axis: .vertical)
                 .textFieldStyle(.plain)
-                .font(.headline)
+                .font(.title3.weight(.semibold))
                 .lineLimit(1...3)
                 .focused($focused)
                 .onSubmit(save)
-                .onAppear { text = record.editText }
-                .onChange(of: record.editText) { t in if !focused { text = t } }
+                .onAppear { text = record.textWithTags }
+                .onChange(of: record.textWithTags) { t in if !focused { text = t } }
                 .onChange(of: focused) { f in if !f { save() } }
                 .help("Edit the running task; Return saves")
             if focused { HashSuggestions(text: $text, tags: store.tags) }
@@ -1092,10 +1164,13 @@ struct RunningText: View {
 
     private func save() {
         let e = QuickEntry.parse(text)
-        guard !e.isEmpty, e.ds != record.ds || e.ticket != record.ticket || e.tags != record.tags else { return }
+        // The ticket sits in the badge above; typing a key here replaces it.
+        let ticket = e.ticket ?? record.ticket
+        guard !e.ds.isEmpty || !e.tags.isEmpty || ticket != nil,
+              e.ds != record.ds || ticket != record.ticket || e.tags != record.tags else { return }
         var r = record
         r.ds = e.ds
-        r.ticket = e.ticket
+        r.ticket = ticket
         r.tags = e.tags
         Task { await store.update(r) }
     }
