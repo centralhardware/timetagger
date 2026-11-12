@@ -1155,7 +1155,13 @@ extension Record {
 
     /// The record's colour: its ticket's, else its task's, so a ticket looks the same in the
     /// timeline, the history and the totals.
-    var taskColor: Color { Color.forKey(ticket ?? taskKey) }
+    /// Keyed on the ticket, else the first tag, never the description, so editing the text
+    /// doesn't recolour the record; with neither it's a neutral grey.
+    var taskColor: Color {
+        if let t = ticket { return Color.forKey(t) }
+        if let tag = tags.sorted().first { return Color.forKey("#" + tag) }
+        return Color.secondary.opacity(0.6)
+    }
 }
 
 /// The running task's text as an always-editable field; Return saves.
