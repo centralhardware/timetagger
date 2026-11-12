@@ -212,8 +212,6 @@ struct MenuView: View {
                     if !parsed.tags.isEmpty { TagLine(tags: parsed.tags) }
                 }
                 .font(.caption).foregroundStyle(.secondary).monospacedDigit()
-            } else if draft.isEmpty {
-                Text("e.g. SM-1176 fix login #call 25m ago").font(.caption).foregroundStyle(.tertiary)
             }
         }
     }
