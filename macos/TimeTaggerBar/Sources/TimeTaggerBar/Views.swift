@@ -96,7 +96,7 @@ struct MenuView: View {
     }
 
     /// Today first, older days below, loading further back as the end scrolls into view.
-    /// Within a day, sessions of the same task fold into one row.
+    /// Within a day, rows run strictly by time; back-to-back sessions of one task fold into one row.
     private var daySection: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0, pinnedViews: .sectionHeaders) {
@@ -647,7 +647,7 @@ extension Record {
     }
 }
 
-/// The sessions of one task (same description and tags) within a day, newest first.
+/// Back-to-back sessions of one task (same description and tags) within a day, newest first.
 struct TaskGroup: Identifiable {
     let records: [Record]
     var id: String { records[0].id }
@@ -655,16 +655,15 @@ struct TaskGroup: Identifiable {
     var isRunning: Bool { records.contains { $0.isRunning } }
     func total(now: Int) -> Int { records.reduce(0) { $0 + $1.duration(now: now) } }
 
-    /// Keeps the day's order by each task's latest session.
+    /// Strictly chronological: only back-to-back sessions of the same task fold together,
+    /// so a task picked up again later in the day shows up again at that time.
     static func group(_ records: [Record]) -> [TaskGroup] {
-        var order: [String] = []
-        var map: [String: [Record]] = [:]
+        let key = { (r: Record) in r.ds.lowercased() + "|" + r.tags.sorted().joined(separator: ",") }
+        var runs: [[Record]] = []
         for r in records {
-            let k = r.ds.lowercased() + "|" + r.tags.sorted().joined(separator: ",")
-            if map[k] == nil { order.append(k) }
-            map[k, default: []].append(r)
+            if let last = runs.last?.last, key(last) == key(r) { runs[runs.count - 1].append(r) } else { runs.append([r]) }
         }
-        return order.map { TaskGroup(records: map[$0]!) }
+        return runs.map { TaskGroup(records: $0) }
     }
 }
 
@@ -789,7 +788,7 @@ struct SessionRow: View {
     }
 }
 
-/// Today's time per tag, biggest first, as a ranked list with thin bars.
+/// Today's time per tag, biggest first, as a ranked list with thin bars. Tapping a row starts that tag.
 struct TagTotals: View {
     @EnvironmentObject var store: Store
 
@@ -804,6 +803,8 @@ struct TagTotals: View {
                 ScrollView {
                     VStack(spacing: 8) {
                         ForEach(totals, id: \.0) { tag, secs in
+                            let current = store.running.contains { $0.tags.contains(tag) }
+                            Button { Task { await store.start(tag: tag) } } label: {
                             VStack(alignment: .leading, spacing: 4) {
                                 HStack {
                                     Text(Record.isTicket(tag) ? tag.uppercased() : "#" + tag)
@@ -821,6 +822,12 @@ struct TagTotals: View {
                                 }
                                 .frame(height: 4)
                             }
+                            .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(current || tag == "untagged")
+                            .help(current ? "Running" : "Start \(Record.isTicket(tag) ? tag.uppercased() : "#" + tag)")
+                            .accessibilityLabel("Start \(tag)")
                         }
                     }
                 }

@@ -318,6 +318,15 @@ final class Store: ObservableObject {
         await save(stopped + [new], label: "Started \u{201C}\(new.ds)\u{201D}", before: running)
     }
 
+    /// Starts work on a tag: resumes its latest task (description and tags), or a bare record with just the tag.
+    func start(tag: String) async {
+        if let last = (running + lately + records).filter({ $0.tags.contains(tag) }).max(by: { $0.t1 < $1.t1 }) {
+            await start(last.ds, tags: last.tags)
+        } else {
+            await start("", tags: [tag])
+        }
+    }
+
     func stop(_ record: Record? = nil) async {
         let t = Int(Date().timeIntervalSince1970)
         let targets = record.map { [$0] } ?? running
