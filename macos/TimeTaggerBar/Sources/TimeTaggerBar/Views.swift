@@ -431,6 +431,7 @@ struct InlineEditor: View {
     @EnvironmentObject var store: Store
     let original: Record
     let close: () -> Void
+    @State private var ticket: String
     @State private var text: String
     @State private var start: Date
     @State private var end: Date
@@ -441,7 +442,8 @@ struct InlineEditor: View {
         original = record
         self.close = close
         let s = Date(timeIntervalSince1970: TimeInterval(record.t1))
-        _text = State(initialValue: record.editText)
+        _ticket = State(initialValue: record.ticket ?? "")
+        _text = State(initialValue: ([record.ds] + record.tags.map { "#" + $0 }).filter { !$0.isEmpty }.joined(separator: " "))
         _start = State(initialValue: s)
         _end = State(initialValue: record.isRunning ? Date() : Date(timeIntervalSince1970: TimeInterval(record.t2)))
         _running = State(initialValue: record.isRunning)
@@ -450,17 +452,23 @@ struct InlineEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            field { TextField("Description #tags", text: $text).textFieldStyle(.plain).onSubmit(save) }
-            HashSuggestions(text: $text, tags: store.tags)
+            // Ticket and text are separate fields, as they are on the server.
             HStack(spacing: 6) {
-                DatePicker("Day", selection: $start, displayedComponents: .date)
-                    .labelsHidden().datePickerStyle(.field)
+                field {
+                    TextField("Ticket", text: $ticket, prompt: Text("SM-1234")).textFieldStyle(.plain).onSubmit(save)
+                        .font(.callout.monospaced())
+                }
+                .frame(width: 110)
+                field { TextField("What was done #tags", text: $text).textFieldStyle(.plain).onSubmit(save) }
+            }
+            HashSuggestions(text: $text, tags: store.tags)
+            HStack(spacing: 8) {
+                TimeRow(label: "Start", time: $start, showsDate: true)
                 Spacer()
                 if canRun { Toggle("Running", isOn: $running).toggleStyle(.checkbox) }
             }
-            TimeRow(label: "Start", time: $start)
             if !running {
-                TimeRow(label: "End", time: $end)
+                TimeRow(label: "End", time: $end, showsDate: !Calendar.current.isDate(end, inSameDayAs: start))
             }
             HStack {
                 if invalid {
@@ -497,15 +505,19 @@ struct InlineEditor: View {
         original.isRunning || !(store.lately + store.records).contains { !$0.isDeleted && $0.key != original.key && $0.t1 > original.t1 }
     }
 
-    /// A finished record whose end isn't after its start can't be saved.
-    private var invalid: Bool { !running && end <= start }
+    /// A finished record whose end isn't after its start can't be saved, nor a ticket that isn't a key.
+    private var invalid: Bool {
+        let t = ticket.trimmingCharacters(in: .whitespaces).lowercased()
+        return (!running && end <= start) || (!t.isEmpty && !Record.isTicket(t))
+    }
 
     private func save() {
         guard !invalid else { return }
         var r = original
         let e = QuickEntry.parse(text)
+        let typed = ticket.trimmingCharacters(in: .whitespaces).uppercased()
         r.ds = e.ds
-        r.ticket = e.ticket
+        r.ticket = typed.isEmpty ? e.ticket : typed
         r.tags = e.tags
         r.t1 = Int(start.timeIntervalSince1970)
         r.t2 = running ? r.t1 : Int(end.timeIntervalSince1970)
@@ -518,46 +530,46 @@ struct InlineEditor: View {
 struct TimeRow: View {
     let label: String
     @Binding var time: Date
+    var showsDate = false
 
     var body: some View {
         HStack(spacing: 6) {
             Text(label).foregroundStyle(.secondary).frame(width: 36, alignment: .leading)
-            TimePicker(time: $time)
-            Spacer()
+            TimePicker(time: $time, showsDate: showsDate)
         }
     }
 }
 
-/// A time shown as a button; clicking opens a full picker: calendar, clock face, ±5 min and Now.
+/// A time as a button, like Calendar's event times: click it for a calendar and a clock face.
 struct TimePicker: View {
     @Binding var time: Date
     var latest: Date? = nil
+    var showsDate = false
     @State private var open = false
 
     var body: some View {
         Button { open.toggle() } label: {
-            Text(time, format: .dateTime.hour().minute()).monospacedDigit()
+            Group {
+                if showsDate {
+                    Text(time, format: .dateTime.day().month(.abbreviated).hour().minute())
+                } else {
+                    Text(time, format: .dateTime.hour().minute())
+                }
+            }
+            .monospacedDigit()
         }
         .buttonStyle(.bordered)
         .controlSize(.small)
         .popover(isPresented: $open, arrowEdge: .bottom) {
-            VStack(spacing: 10) {
-                HStack(alignment: .top, spacing: 12) {
-                    DatePicker("", selection: clamped, displayedComponents: .date)
-                        .datePickerStyle(.graphical).labelsHidden()
+            HStack(alignment: .top, spacing: 12) {
+                DatePicker("", selection: clamped, displayedComponents: .date)
+                    .datePickerStyle(.graphical).labelsHidden()
+                VStack(spacing: 8) {
                     DatePicker("", selection: clamped, displayedComponents: .hourAndMinute)
                         .datePickerStyle(.graphical).labelsHidden()
-                }
-                HStack {
                     DatePicker("", selection: clamped, displayedComponents: .hourAndMinute)
-                        .datePickerStyle(.field).labelsHidden().fixedSize()
-                    Spacer()
-                    Button("−5") { clamped.wrappedValue = time.addingTimeInterval(-300) }.help("5 minutes earlier")
-                    Button("+5") { clamped.wrappedValue = time.addingTimeInterval(300) }.help("5 minutes later")
-                    Button("Now") { clamped.wrappedValue = Date() }
-                    Button("Done") { open = false }.keyboardShortcut(.defaultAction)
+                        .datePickerStyle(.stepperField).labelsHidden().fixedSize()
                 }
-                .controlSize(.small)
             }
             .padding(12)
         }
