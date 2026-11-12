@@ -139,7 +139,8 @@ struct MenuView: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Circle().fill(.red).frame(width: 6, height: 6).accessibilityLabel("Running")
-                Text("Since \(store.clock(r.t1))")
+                Text("Since")
+                RunningStart(record: r)
                 if store.showsWorkZone {
                     Text("·").foregroundStyle(.tertiary)
                     Text("\(store.clock(r.t1, work: true)) \(store.workZoneName)")
@@ -944,5 +945,33 @@ struct HashSuggestions: View {
                 }
             }
         }
+    }
+}
+
+/// The running record's start as an always-visible hh:mm field; a change saves itself after a short pause.
+struct RunningStart: View {
+    @EnvironmentObject var store: Store
+    let record: Record
+    @State private var start = Date()
+
+    var body: some View {
+        DatePicker("Start", selection: $start, in: ...Date(), displayedComponents: .hourAndMinute)
+            .labelsHidden()
+            .datePickerStyle(.field)
+            .fixedSize()
+            .help("Edit the start time")
+            .onAppear { start = Date(timeIntervalSince1970: TimeInterval(record.t1)) }
+            .onChange(of: record.t1) { t in start = Date(timeIntervalSince1970: TimeInterval(t)) }
+            // Debounced so typing "14:30" doesn't save 1, 14, 14:3 along the way.
+            .task(id: start) {
+                try? await Task.sleep(nanoseconds: 900_000_000)
+                guard !Task.isCancelled else { return }
+                let t = Int(start.timeIntervalSince1970)
+                guard t != record.t1, t < Int(Date().timeIntervalSince1970) else { return }
+                var r = record
+                r.t1 = t
+                r.t2 = t
+                await store.update(r)
+            }
     }
 }
