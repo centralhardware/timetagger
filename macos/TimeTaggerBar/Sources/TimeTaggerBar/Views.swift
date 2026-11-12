@@ -48,8 +48,8 @@ struct MenuView: View {
             .padding(16)
             .frame(width: 320)
             // Drag the left column away (like a Calendar popover) to keep it as a window.
-            .gesture(DragGesture(minimumDistance: 40).onEnded { v in
-                StatusBarController.shared?.popOut(offset: v.translation)
+            .gesture(DragGesture(minimumDistance: 12).onChanged { _ in
+                StatusBarController.shared?.popOut(dragging: true)
             })
 
             Divider()
