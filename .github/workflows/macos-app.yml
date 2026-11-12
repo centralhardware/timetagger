@@ -1,7 +1,9 @@
 name: macOS app
 
 on:
+  # Pushes to main only: a PR branch is already built by the pull_request trigger.
   push:
+    branches: [ main ]
     paths: ["macos/**", ".github/workflows/macos-app.yml"]
   pull_request:
     paths: ["macos/**", ".github/workflows/macos-app.yml"]
