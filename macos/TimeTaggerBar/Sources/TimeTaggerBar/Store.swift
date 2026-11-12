@@ -202,6 +202,32 @@ final class Store: ObservableObject {
         return r.title
     }
 
+    /// Starts the same task again: description, ticket and tags.
+    func resume(_ r: Record) async {
+        await start(r.ds, ticket: r.ticket, tags: r.tags)
+    }
+
+    /// Starts work on a ticket: resumes its latest task, or a bare record with just the ticket.
+    func start(ticket: String) async {
+        if let last = (running + lately + records).filter({ $0.ticket == ticket }).max(by: { $0.t1 < $1.t1 }) {
+            await resume(last)
+        } else {
+            await start("", ticket: ticket)
+        }
+    }
+
+    /// Today's time per ticket, biggest first.
+    var totalsByTicket: [(String, Int)] {
+        var sums: [String: Int] = [:]
+        let (p1, p2) = period.range(in: workTimeZone)
+        for r in records {
+            guard let t = r.ticket else { continue }
+            let a = max(r.t1, p1), b = min(r.isRunning ? now : r.t2, p2)
+            if b > a { sums[t, default: 0] += b - a }
+        }
+        return sums.sorted { $0.value > $1.value }
+    }
+
     var totalsByTag: [(String, Int)] {
         var sums: [String: Int] = [:]
         let (p1, p2) = period.range(in: workTimeZone)
@@ -316,17 +342,17 @@ final class Store: ObservableObject {
 
     /// Starts a new record, stopping whatever is running (like the web app's default).
     /// `at` backdates the start (from "25m ago" in the task field); whatever was running stops there.
-    func start(_ description: String, tags: [String] = [], at: Int? = nil) async {
+    func start(_ description: String, ticket: String? = nil, tags: [String] = [], at: Int? = nil) async {
         let t = min(at ?? Int(Date().timeIntervalSince1970), Int(Date().timeIntervalSince1970))
         let stopped = running.map { r -> Record in var r = r; r.t2 = max(t, r.t1 + 1); return r }
-        let new = Record(key: Record.newKey(), rev: 0, t1: t, t2: t, ds: description.trimmingCharacters(in: .whitespaces), tags: tags, deleted: 0)
+        let new = Record(key: Record.newKey(), rev: 0, t1: t, t2: t, ds: description.trimmingCharacters(in: .whitespaces), tags: tags, deleted: 0, ticket: ticket)
         await save(stopped + [new], label: "Started \u{201C}\(new.ds)\u{201D}", before: running)
     }
 
     /// Starts work on a tag: resumes its latest task (description and tags), or a bare record with just the tag.
     func start(tag: String) async {
         if let last = (running + lately + records).filter({ $0.tags.contains(tag) }).max(by: { $0.t1 < $1.t1 }) {
-            await start(last.ds, tags: last.tags)
+            await resume(last)
         } else {
             await start("", tags: [tag])
         }
@@ -341,9 +367,9 @@ final class Store: ObservableObject {
     /// The last few distinct tasks (description + tags), newest first, for one-click resume.
     var recentTasks: [Record] {
         // The running task is already on screen; it isn't "recent".
-        var seen = Set(running.map { $0.ds.lowercased() + "|" + $0.tags.sorted().joined(separator: ",") }), out: [Record] = []
+        var seen = Set(running.map(\.taskKey)), out: [Record] = []
         for r in (lately + records).sorted(by: { $0.t1 > $1.t1 }) where !r.isRunning && !r.isDeleted {
-            let k = r.ds.lowercased() + "|" + r.tags.sorted().joined(separator: ",")
+            let k = r.taskKey
             if seen.insert(k).inserted { out.append(r) }
             if out.count == 3 { break }
         }

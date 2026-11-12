@@ -3,7 +3,6 @@ import SwiftUI
 
 struct MenuView: View {
     @EnvironmentObject var store: Store
-    @Environment(\.openWindow) private var openWindow
     @State private var draft = ""
     @FocusState private var fieldFocused: Bool
     @State private var switching = false
@@ -90,8 +89,7 @@ struct MenuView: View {
             Spacer()
             Menu {
                 Button("Settings…") {
-                    openWindow(id: "settings")
-                    NSApp.activate(ignoringOtherApps: true)
+                    openSettings()
                 }
                 Button("Refresh") { Task { await store.refresh() } }
                 Divider()
@@ -129,7 +127,7 @@ struct MenuView: View {
                             // Past days: time per tag; the full log opens from the header.
                             ForEach(Self.tagTotals(day.records), id: \.0) { tag, secs in
                                 HStack {
-                                    Text(tag == "untagged" ? "Untagged" : Record.isTicket(tag) ? tag.uppercased() : "#" + tag).lineLimit(1)
+                                    Text(tag == "untagged" ? "Untagged" : tag == tag.uppercased() ? tag : "#" + tag).lineLimit(1)
                                     Spacer()
                                     Text(Store.format(secs, seconds: false)).monospacedDigit().foregroundStyle(.secondary)
                                 }
@@ -256,16 +254,19 @@ struct MenuView: View {
         guard !e.isEmpty else { return }
         draft = ""
         switching = false
-        Task { await store.start(e.ds, tags: e.tags, at: e.start) }
+        Task { await store.start(e.ds, ticket: e.ticket, tags: e.tags, at: e.start) }
     }
 
     /// A day's time per tag, biggest first; a record with several tags counts toward each.
     static func tagTotals(_ records: [Record]) -> [(String, Int)] {
-        var sums: [String: Int] = [:]
+        // Tickets (upper case) first, then tags; a record counts toward its ticket and each tag.
+        var tickets: [String: Int] = [:], tags: [String: Int] = [:]
         for r in records {
-            for t in r.tags.isEmpty ? ["untagged"] : r.tags { sums[t, default: 0] += r.duration() }
+            if let t = r.ticket { tickets[t, default: 0] += r.duration() }
+            for t in r.tags { tags[t, default: 0] += r.duration() }
+            if r.ticket == nil && r.tags.isEmpty { tags["untagged", default: 0] += r.duration() }
         }
-        return sums.sorted { $0.value > $1.value }
+        return tickets.sorted { $0.value > $1.value } + tags.sorted { $0.value > $1.value }
     }
 
     private func load(_ op: () async throws -> Void) async {
@@ -351,8 +352,8 @@ struct TicketLinks: View {
     let record: Record
 
     var body: some View {
-        ForEach(record.tags.compactMap { t in store.ticketLink(t).map { (t, $0) } }, id: \.0) { tag, url in
-            Link("Open \(tag.uppercased())", destination: url)
+        if let t = record.ticket, let url = store.ticketLink(t.lowercased()) {
+            Link("Open \(t)", destination: url)
         }
     }
 }
@@ -486,6 +487,7 @@ struct InlineEditor: View {
         var r = original
         let e = QuickEntry.parse(text)
         r.ds = e.ds
+        r.ticket = e.ticket
         r.tags = e.tags
         r.t1 = Int(start.timeIntervalSince1970)
         r.t2 = running ? r.t1 : Int(end.timeIntervalSince1970)
@@ -664,28 +666,31 @@ struct SettingsView: View {
 }
 
 extension Record {
-    /// What to call the record: its description, else its ticket tag, else its tags.
+    /// What to call the record: its description, else its ticket, else its tags.
     var title: String {
         if !ds.trimmingCharacters(in: .whitespaces).isEmpty { return ds }
-        if let t = ticketTag { return t.uppercased() }
+        if let t = ticket { return t }
         if !tags.isEmpty { return tags.map { "#" + $0 }.joined(separator: " ") }
         return "Untitled"
     }
 
-    /// The first tag that looks like a ticket key, e.g. sm-1114.
-    var ticketTag: String? {
-        tags.first(where: Record.isTicket)
-    }
-
+    /// A key like sm-1114 (lower case, as typed in tags or text).
     static func isTicket(_ tag: String) -> Bool {
         tag.range(of: #"^[a-z][a-z0-9]*-\d+$"#, options: .regularExpression) != nil
     }
 
-    /// Tags not already shown as the title.
-    var extraTags: [String] {
-        if !ds.trimmingCharacters(in: .whitespaces).isEmpty { return tags }
-        if let t = ticketTag { return tags.filter { $0 != t } }
-        return []
+    /// Same task = same description, ticket and tags.
+    var taskKey: String {
+        ds.lowercased() + "|" + (ticket ?? "") + "|" + tags.sorted().joined(separator: ",")
+    }
+
+    /// Tags shown after the title.
+    var extraTags: [String] { tags }
+
+    /// The ticket shown before the title, unless the title already is the ticket.
+    var ticketBadge: String? {
+        guard let t = ticket, !ds.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        return t
     }
 }
 
@@ -700,7 +705,7 @@ struct TaskGroup: Identifiable {
     /// Strictly chronological: only back-to-back sessions of the same task fold together,
     /// so a task picked up again later in the day shows up again at that time.
     static func group(_ records: [Record]) -> [TaskGroup] {
-        let key = { (r: Record) in r.ds.lowercased() + "|" + r.tags.sorted().joined(separator: ",") }
+        let key = { (r: Record) in r.taskKey }
         var runs: [[Record]] = []
         for r in records {
             if let last = runs.last?.last, key(last) == key(r) { runs[runs.count - 1].append(r) } else { runs.append([r]) }
@@ -787,6 +792,11 @@ struct SessionRow: View {
     private var row: some View {
         HStack(spacing: 8) {
             if running { Circle().fill(.red).frame(width: 6, height: 6).accessibilityLabel("Running") }
+            if !secondary, let t = record.ticketBadge {
+                Text(t).font(.caption.monospaced()).foregroundStyle(.secondary)
+                    .padding(.horizontal, 4).padding(.vertical, 1)
+                    .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+            }
             Text(title)
                 .foregroundStyle(secondary ? HierarchicalShapeStyle.secondary : HierarchicalShapeStyle.primary)
                 .monospacedDigit()
@@ -799,7 +809,7 @@ struct SessionRow: View {
             }
             Spacer(minLength: 4)
             if !record.isRunning && !secondary {
-                Button { Task { await store.start(record.ds, tags: record.tags) } } label: {
+                Button { Task { await store.resume(record) } } label: {
                     Image(systemName: "play.fill").font(.caption)
                 }
                 .buttonStyle(.borderless)
@@ -821,7 +831,7 @@ struct SessionRow: View {
         .onTapGesture(perform: tap)
         .contextMenu {
             Button("Edit") { editing = record }
-            Button("Resume") { Task { await store.start(record.ds, tags: record.tags) } }
+            Button("Resume") { Task { await store.resume(record) } }
             if record.isRunning { Button("Stop") { Task { await store.stop(record) } } }
             TicketLinks(record: record)
             Divider()
@@ -830,51 +840,76 @@ struct SessionRow: View {
     }
 }
 
-/// Today's time per tag, biggest first, as a ranked list with thin bars. Tapping a row starts that tag.
+/// Today's time by ticket and by tag. Both lists show when they fit; otherwise a switch picks one.
+/// Tapping a row starts that ticket or tag.
 struct TagTotals: View {
     @EnvironmentObject var store: Store
+    @AppStorage("totalsMode") private var mode = 0   // 0 tickets, 1 tags
 
     var body: some View {
-        let totals = store.totalsByTag
-        let top = totals.first?.1 ?? 1
-        VStack(alignment: .leading, spacing: 8) {
-            Text("By tag today").font(.caption.weight(.medium)).foregroundStyle(.secondary)
-            if totals.isEmpty {
+        let tickets = store.totalsByTicket, tags = store.totalsByTag.filter { $0.0 != "untagged" || store.totalsByTicket.isEmpty }
+        if tickets.isEmpty && tags.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Today").font(.caption.weight(.medium)).foregroundStyle(.secondary)
                 Text("Nothing tracked yet").font(.callout).foregroundStyle(.tertiary)
-            } else {
-                ScrollView {
-                    VStack(spacing: 8) {
-                        ForEach(totals, id: \.0) { tag, secs in
-                            let current = store.running.contains { $0.tags.contains(tag) }
-                            Button { Task { await store.start(tag: tag) } } label: {
-                            VStack(alignment: .leading, spacing: 4) {
-                                HStack {
-                                    if current { Circle().fill(.red).frame(width: 6, height: 6).accessibilityLabel("Running") }
-                                    Text(Record.isTicket(tag) ? tag.uppercased() : "#" + tag)
-                                        .lineLimit(1)
-                                    Spacer()
-                                    Text(Store.format(secs, seconds: false)).monospacedDigit().foregroundStyle(.secondary)
-                                }
-                                .font(.callout)
-                                GeometryReader { g in
-                                    Capsule().fill(Color.primary.opacity(0.08))
-                                        .overlay(alignment: .leading) {
-                                            Capsule().fill(Color.accentColor.opacity(tag == totals.first?.0 ? 0.9 : 0.45))
-                                                .frame(width: max(4, g.size.width * CGFloat(secs) / CGFloat(top)))
-                                        }
-                                }
-                                .frame(height: 4)
-                            }
-                            .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            // Not .disabled: that greys the row out and hides its bar.
-                            .allowsHitTesting(!current && tag != "untagged")
-                            .help(current ? "Running" : "Start \(Record.isTicket(tag) ? tag.uppercased() : "#" + tag)")
-                            .accessibilityLabel("Start \(tag)")
-                        }
+            }
+        } else {
+            ViewThatFits(in: .vertical) {
+                VStack(alignment: .leading, spacing: 12) {
+                    if !tickets.isEmpty { list("By ticket today", tickets, ticket: true) }
+                    if !tags.isEmpty { list("By tag today", tags, ticket: false) }
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    Picker("", selection: $mode) {
+                        Text("Tickets").tag(0)
+                        Text("Tags").tag(1)
+                    }
+                    .pickerStyle(.segmented).labelsHidden().controlSize(.small)
+                    ScrollView {
+                        if mode == 0 { rows(tickets, ticket: true) } else { rows(tags, ticket: false) }
                     }
                 }
+            }
+        }
+    }
+
+    private func list(_ title: String, _ totals: [(String, Int)], ticket: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title).font(.caption.weight(.medium)).foregroundStyle(.secondary)
+            rows(totals, ticket: ticket)
+        }
+    }
+
+    private func rows(_ totals: [(String, Int)], ticket: Bool) -> some View {
+        let top = totals.first?.1 ?? 1
+        return VStack(spacing: 8) {
+            ForEach(totals, id: \.0) { key, secs in
+                let current = store.running.contains { ticket ? $0.ticket == key : $0.tags.contains(key) }
+                let label = ticket ? key : key == "untagged" ? "Untagged" : "#" + key
+                Button { Task { if ticket { await store.start(ticket: key) } else { await store.start(tag: key) } } } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            if current { Circle().fill(.red).frame(width: 6, height: 6).accessibilityLabel("Running") }
+                            Text(label).lineLimit(1)
+                            Spacer()
+                            Text(Store.format(secs, seconds: false)).monospacedDigit().foregroundStyle(.secondary)
+                        }
+                        .font(.callout)
+                        GeometryReader { g in
+                            Capsule().fill(Color.primary.opacity(0.08))
+                                .overlay(alignment: .leading) {
+                                    Capsule().fill(Color.accentColor.opacity(key == totals.first?.0 ? 0.9 : 0.45))
+                                        .frame(width: max(4, g.size.width * CGFloat(secs) / CGFloat(top)))
+                                }
+                        }
+                        .frame(height: 4)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                // Not .disabled: that greys the row out and hides its bar.
+                .allowsHitTesting(!current && key != "untagged")
+                .help(current ? "Running" : "Start \(label)")
             }
         }
     }
@@ -915,7 +950,7 @@ struct RecentTasks: View {
         if !recent.isEmpty {
             HStack(spacing: 6) {
                 ForEach(Array(recent.enumerated()), id: \.element.id) { i, r in
-                    Button { Task { await store.start(r.ds, tags: r.tags) } } label: {
+                    Button { Task { await store.resume(r) } } label: {
                         Label(r.title, systemImage: "play.fill").lineLimit(1)
                     }
                     .buttonStyle(.bordered).controlSize(.small)
@@ -1020,12 +1055,12 @@ struct RunningStart: View {
 extension Record {
     /// Description with tags at the end as plain "#tag" text: the one-field form used for editing.
     var editText: String {
-        ([ds] + tags.map { "#" + $0 }).filter { !$0.isEmpty }.joined(separator: " ")
+        ([ticket ?? "", ds] + tags.map { "#" + $0 }).filter { !$0.isEmpty }.joined(separator: " ")
     }
 
     /// A stable colour per task (description + tags), so the same task looks the same everywhere.
     var taskColor: Color {
-        let key = ds.lowercased() + "|" + tags.sorted().joined(separator: ",")
+        let key = taskKey
         var h: UInt32 = 2166136261
         for b in key.utf8 { h = (h ^ UInt32(b)) &* 16777619 }
         return Color(hue: Double(h % 360) / 360, saturation: 0.55, brightness: 0.85)
@@ -1057,9 +1092,10 @@ struct RunningText: View {
 
     private func save() {
         let e = QuickEntry.parse(text)
-        guard !e.isEmpty, e.ds != record.ds || e.tags != record.tags else { return }
+        guard !e.isEmpty, e.ds != record.ds || e.ticket != record.ticket || e.tags != record.tags else { return }
         var r = record
         r.ds = e.ds
+        r.ticket = e.ticket
         r.tags = e.tags
         Task { await store.update(r) }
     }

@@ -10,6 +10,8 @@ data class Record(
     val start: IsoInstant,
     val stop: IsoInstant?,
     val description: String,
+    /** Upper case ticket key such as "SM-1176", or null. */
+    val ticket: String? = null,
     /** Lower case, sorted; stored apart from the description. */
     val tags: List<String>,
     val deletedAt: IsoInstant?,
@@ -27,6 +29,8 @@ data class RecordInput(
     val start: IsoInstant,
     val stop: IsoInstant? = null,
     val description: String = "",
+    /** The ticket key; see [Tickets.normalize]. Null or blank clears it. */
+    val ticket: String? = null,
     /** Replaces the record's tags; see [Tags.normalize]. */
     val tags: List<String> = emptyList(),
     /** Marks the record deleted (or restores it with false). */
@@ -44,6 +48,17 @@ data class RecordBatch(val records: List<RecordInput>)
 
 @Serializable
 data class RecordList(val records: List<Record>)
+
+object Tickets {
+    private val valid = Regex("[A-Z][A-Z0-9]*-[0-9]+")
+
+    /** Upper case and trimmed; null for none; throws [IllegalArgumentException] when it isn't a key like "SM-1176". */
+    fun normalize(ticket: String?): String? {
+        val t = ticket?.trim()?.removePrefix("#")?.uppercase()?.takeIf { it.isNotEmpty() } ?: return null
+        require(valid.matches(t)) { "a ticket must look like SM-1176" }
+        return t
+    }
+}
 
 object Tags {
     private val valid = Regex("[^\\s#,]+")
