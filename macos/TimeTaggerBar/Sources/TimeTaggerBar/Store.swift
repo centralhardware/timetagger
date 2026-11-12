@@ -193,8 +193,13 @@ final class Store: ObservableObject {
     var menuTitle: String {
         let today = Self.format(todayTotal, seconds: false)
         guard let r = running.first else { return idleInWorkHours ? "Not tracking · " + today : today }
-        let ticket = r.tags.first(where: Record.isTicket).map { $0.uppercased() + " " } ?? ""
-        return ticket + Self.format(r.duration(now: now), seconds: false) + " · " + today
+        return Self.format(r.duration(now: now), seconds: false) + " · " + today
+    }
+
+    /// Hover text for the menu bar item: the running task's name, kept out of the bar itself.
+    var menuTooltip: String {
+        guard let r = running.first else { return "Not tracking" }
+        return r.title
     }
 
     var totalsByTag: [(String, Int)] {
@@ -335,7 +340,8 @@ final class Store: ObservableObject {
 
     /// The last few distinct tasks (description + tags), newest first, for one-click resume.
     var recentTasks: [Record] {
-        var seen = Set<String>(), out: [Record] = []
+        // The running task is already on screen; it isn't "recent".
+        var seen = Set(running.map { $0.ds.lowercased() + "|" + $0.tags.sorted().joined(separator: ",") }), out: [Record] = []
         for r in (lately + records).sorted(by: { $0.t1 > $1.t1 }) where !r.isRunning && !r.isDeleted {
             let k = r.ds.lowercased() + "|" + r.tags.sorted().joined(separator: ",")
             if seen.insert(k).inserted { out.append(r) }

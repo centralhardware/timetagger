@@ -6,6 +6,7 @@ struct MenuView: View {
     @Environment(\.openWindow) private var openWindow
     @State private var draft = ""
     @FocusState private var fieldFocused: Bool
+    @State private var switching = false
     @State private var editing: Record?
     @StateObject private var feed = DayFeed()
 
@@ -17,7 +18,16 @@ struct MenuView: View {
                     InlineEditor(record: r) { editing = nil }
                 } else if let r = store.running.first {
                     runningCard(r)
-                    taskField("Switch to…", icon: "arrow.right")
+                    if switching {
+                        taskField("Switch to…", icon: "arrow.right")
+                    } else {
+                        Button { switching = true; fieldFocused = true } label: {
+                            Label("Switch to…", systemImage: "arrow.right")
+                        }
+                        .buttonStyle(.borderless).foregroundStyle(.secondary)
+                        .keyboardShortcut("n", modifiers: .command)
+                        .help("Switch to another task (⌘N)")
+                    }
                 } else {
                     idleCard
                 }
@@ -139,7 +149,8 @@ struct MenuView: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Circle().fill(.red).frame(width: 6, height: 6).accessibilityLabel("Running")
-                Text("Since \(store.clock(r.t1))")
+                Text("Since")
+                RunningStart(record: r)
                 if store.showsWorkZone {
                     Text("·").foregroundStyle(.tertiary)
                     Text("\(store.clock(r.t1, work: true)) \(store.workZoneName)")
@@ -149,15 +160,7 @@ struct MenuView: View {
             Text(Store.format(r.duration(now: store.now)))
                 .font(.system(size: 40, weight: .light, design: .rounded)).monospacedDigit()
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Button { editing = r } label: {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(r.title).font(.headline).lineLimit(2).multilineTextAlignment(.leading)
-                        if !r.extraTags.isEmpty { TagLine(tags: r.extraTags).font(.callout) }
-                    }
-                }
-                .buttonStyle(.plain)
-                .keyboardShortcut("e", modifiers: .command)
-                .help("Edit (⌘E)")
+                RunningText(record: r)
                 Spacer(minLength: 8)
                 Button { Task { await store.stop(r) } } label: {
                     Label("Stop", systemImage: "stop.fill")
@@ -212,8 +215,6 @@ struct MenuView: View {
                     if !parsed.tags.isEmpty { TagLine(tags: parsed.tags) }
                 }
                 .font(.caption).foregroundStyle(.secondary).monospacedDigit()
-            } else if draft.isEmpty {
-                Text("e.g. SM-1176 fix login #call 25m ago").font(.caption).foregroundStyle(.tertiary)
             }
         }
     }
@@ -223,6 +224,7 @@ struct MenuView: View {
         let e = QuickEntry.parse(draft)
         guard !e.isEmpty else { return }
         draft = ""
+        switching = false
         Task { await store.start(e.ds, tags: e.tags, at: e.start) }
     }
 
@@ -370,8 +372,7 @@ struct InlineEditor: View {
     @EnvironmentObject var store: Store
     let original: Record
     let close: () -> Void
-    @State private var ds: String
-    @State private var tagText: String
+    @State private var text: String
     @State private var start: Date
     @State private var end: Date
     @State private var running: Bool
@@ -381,8 +382,7 @@ struct InlineEditor: View {
         original = record
         self.close = close
         let s = Date(timeIntervalSince1970: TimeInterval(record.t1))
-        _ds = State(initialValue: record.ds)
-        _tagText = State(initialValue: record.tags.joined(separator: " "))
+        _text = State(initialValue: record.editText)
         _start = State(initialValue: s)
         _end = State(initialValue: record.isRunning ? Date() : Date(timeIntervalSince1970: TimeInterval(record.t2)))
         _running = State(initialValue: record.isRunning)
@@ -391,17 +391,13 @@ struct InlineEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            field { TextField("Description", text: $ds).textFieldStyle(.plain).onSubmit(save) }
-            field {
-                Image(systemName: "number").foregroundStyle(.secondary)
-                TextField("tags", text: $tagText).textFieldStyle(.plain).onSubmit(save)
-            }
-            TagSuggestions(text: $tagText, tags: store.tags)
+            field { TextField("Description #tags", text: $text).textFieldStyle(.plain).onSubmit(save) }
+            HashSuggestions(text: $text, tags: store.tags)
             HStack(spacing: 6) {
                 DatePicker("Day", selection: $start, displayedComponents: .date)
                     .labelsHidden().datePickerStyle(.field)
                 Spacer()
-                Toggle("Running", isOn: $running).toggleStyle(.checkbox)
+                if canRun { Toggle("Running", isOn: $running).toggleStyle(.checkbox) }
             }
             TimeRow(label: "Start", time: $start)
             if !running {
@@ -437,14 +433,20 @@ struct InlineEditor: View {
             .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
     }
 
+    /// Only the newest record (nothing logged after it) can be set running again.
+    private var canRun: Bool {
+        original.isRunning || !(store.lately + store.records).contains { !$0.isDeleted && $0.key != original.key && $0.t1 > original.t1 }
+    }
+
     /// A finished record whose end isn't after its start can't be saved.
     private var invalid: Bool { !running && end <= start }
 
     private func save() {
         guard !invalid else { return }
         var r = original
-        r.ds = ds
-        r.tags = Record.parseTags(tagText)
+        let e = QuickEntry.parse(text)
+        r.ds = e.ds
+        r.tags = e.tags
         r.t1 = Int(start.timeIntervalSince1970)
         r.t2 = running ? r.t1 : Int(end.timeIntervalSince1970)
         close()
@@ -694,7 +696,7 @@ struct TaskGroupRow: View {
                            detail: group.records.count > 1 ? "\(group.records.count) sessions" : store.range(group.first),
                            duration: group.total(now: store.now), running: group.isRunning,
                            editing: $editing, editsInline: group.records.count == 1) {
-                    if group.records.count > 1 { withAnimation(.easeOut(duration: 0.15)) { open.toggle() } } else { editing = group.first }
+                    if group.records.count > 1 { withAnimation(.easeOut(duration: 0.15)) { open.toggle() } } else { editing = editing?.id == group.first.id ? nil : group.first }
                 }
             }
             if open {
@@ -703,7 +705,7 @@ struct TaskGroupRow: View {
                         Color.clear.frame(width: 12, height: 1)
                         SessionRow(record: r, title: store.range(r), detail: nil,
                                    duration: r.duration(now: store.now), running: r.isRunning,
-                                   editing: $editing, secondary: true) { editing = r }
+                                   editing: $editing, secondary: true) { editing = editing?.id == r.id ? nil : r }
                     }
                 }
             }
@@ -900,11 +902,12 @@ struct DayTimeline: View {
                         ForEach(recs) { r in
                             let a = CGFloat(max(r.t1, first) - first), b = CGFloat((r.isRunning ? store.now : r.t2) - first)
                             RoundedRectangle(cornerRadius: 2)
-                                .fill(r.isRunning ? Color.red.opacity(0.7) : Color.accentColor.opacity(0.7))
+                                .fill(r.taskColor)
+                                .overlay(r.isRunning ? RoundedRectangle(cornerRadius: 2).stroke(Color.red, lineWidth: 1) : nil)
                                 .frame(width: max(2, (b - a) / span * g.size.width))
                                 .offset(x: a / span * g.size.width)
                                 .help("\(r.title) \(store.range(r))")
-                                .onTapGesture { editing = r }
+                                .onTapGesture { editing = editing?.id == r.id ? nil : r }
                         }
                     }
                 }
@@ -941,5 +944,81 @@ struct HashSuggestions: View {
                 }
             }
         }
+    }
+}
+
+/// The running record's start as an always-visible hh:mm field; a change saves itself after a short pause.
+struct RunningStart: View {
+    @EnvironmentObject var store: Store
+    let record: Record
+    @State private var start = Date()
+
+    var body: some View {
+        DatePicker("Start", selection: $start, in: ...Date(), displayedComponents: .hourAndMinute)
+            .labelsHidden()
+            .datePickerStyle(.field)
+            .fixedSize()
+            .help("Edit the start time")
+            .onAppear { start = Date(timeIntervalSince1970: TimeInterval(record.t1)) }
+            .onChange(of: record.t1) { t in start = Date(timeIntervalSince1970: TimeInterval(t)) }
+            // Debounced so typing "14:30" doesn't save 1, 14, 14:3 along the way.
+            .task(id: start) {
+                try? await Task.sleep(nanoseconds: 900_000_000)
+                guard !Task.isCancelled else { return }
+                let t = Int(start.timeIntervalSince1970)
+                guard t != record.t1, t < Int(Date().timeIntervalSince1970) else { return }
+                var r = record
+                r.t1 = t
+                r.t2 = t
+                await store.update(r)
+            }
+    }
+}
+
+extension Record {
+    /// Description with tags at the end as plain "#tag" text: the one-field form used for editing.
+    var editText: String {
+        ([ds] + tags.map { "#" + $0 }).filter { !$0.isEmpty }.joined(separator: " ")
+    }
+
+    /// A stable colour per task (description + tags), so the same task looks the same everywhere.
+    var taskColor: Color {
+        let key = ds.lowercased() + "|" + tags.sorted().joined(separator: ",")
+        var h: UInt32 = 2166136261
+        for b in key.utf8 { h = (h ^ UInt32(b)) &* 16777619 }
+        return Color(hue: Double(h % 360) / 360, saturation: 0.55, brightness: 0.85)
+    }
+}
+
+/// The running task's text as an always-editable field; Return saves.
+struct RunningText: View {
+    @EnvironmentObject var store: Store
+    let record: Record
+    @State private var text = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            TextField("What are you working on? #tags", text: $text, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(.headline)
+                .lineLimit(1...3)
+                .focused($focused)
+                .onSubmit(save)
+                .onAppear { text = record.editText }
+                .onChange(of: record.editText) { t in if !focused { text = t } }
+                .onChange(of: focused) { f in if !f { save() } }
+                .help("Edit the running task; Return saves")
+            if focused { HashSuggestions(text: $text, tags: store.tags) }
+        }
+    }
+
+    private func save() {
+        let e = QuickEntry.parse(text)
+        guard !e.isEmpty, e.ds != record.ds || e.tags != record.tags else { return }
+        var r = record
+        r.ds = e.ds
+        r.tags = e.tags
+        Task { await store.update(r) }
     }
 }

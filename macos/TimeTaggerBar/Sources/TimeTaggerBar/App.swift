@@ -10,6 +10,7 @@ struct TimeTaggerBarApp: App {
         } label: {
             Image(systemName: store.running.isEmpty ? "clock" : "clock.fill")
             Text(store.menuTitle).monospacedDigit()
+                .help(store.menuTooltip)
         }
         .menuBarExtraStyle(.window)
 
