@@ -204,19 +204,19 @@ struct MenuView: View {
                 }
             }
             .font(.caption).foregroundStyle(.secondary).monospacedDigit()
-            Text(Store.format(r.duration(now: store.now)))
-                .font(.system(size: 40, weight: .light, design: .rounded)).monospacedDigit()
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                RunningText(record: r)
+            // Clock and Stop share a row; the task text gets the full width below.
+            HStack(alignment: .center, spacing: 8) {
+                Text(Store.format(r.duration(now: store.now)))
+                    .font(.system(size: 40, weight: .light, design: .rounded)).monospacedDigit()
                 Spacer(minLength: 8)
                 Button { Task { await store.stop(r) } } label: {
                     Label("Stop", systemImage: "stop.fill")
                 }
-                .controlSize(.large)
                 .keyboardShortcut(".", modifiers: .command)
                 .help("Stop (⌘.)")
             }
-            .padding(.top, 4)
+            RunningText(record: r)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1053,6 +1053,7 @@ struct RunningStart: View {
         DatePicker("Start", selection: $start, in: ...Date(), displayedComponents: .hourAndMinute)
             .labelsHidden()
             .datePickerStyle(.field)
+            .controlSize(.small)
             .fixedSize()
             .help("Edit the start time")
             .onAppear { start = Date(timeIntervalSince1970: TimeInterval(record.t1)) }
