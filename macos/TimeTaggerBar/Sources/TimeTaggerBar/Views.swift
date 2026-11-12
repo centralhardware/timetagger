@@ -522,17 +522,50 @@ struct TimeRow: View {
     var body: some View {
         HStack(spacing: 6) {
             Text(label).foregroundStyle(.secondary).frame(width: 36, alignment: .leading)
-            HStack(spacing: 6) {
-                DatePicker(label, selection: $time, displayedComponents: .hourAndMinute)
-                    .labelsHidden()
-                    .datePickerStyle(.field)
-                Button("−5") { time = time.addingTimeInterval(-300) }.help("5 minutes earlier")
-                Button("+5") { time = time.addingTimeInterval(300) }.help("5 minutes later")
-                Button("Now") { time = Date() }
-            }
-            .controlSize(.small)
-            .monospacedDigit()
+            TimePicker(time: $time)
+            Spacer()
         }
+    }
+}
+
+/// A time shown as a button; clicking opens a full picker: calendar, clock face, ±5 min and Now.
+struct TimePicker: View {
+    @Binding var time: Date
+    var latest: Date? = nil
+    @State private var open = false
+
+    var body: some View {
+        Button { open.toggle() } label: {
+            Text(time, format: .dateTime.hour().minute()).monospacedDigit()
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .popover(isPresented: $open, arrowEdge: .bottom) {
+            VStack(spacing: 10) {
+                HStack(alignment: .top, spacing: 12) {
+                    DatePicker("", selection: clamped, displayedComponents: .date)
+                        .datePickerStyle(.graphical).labelsHidden()
+                    DatePicker("", selection: clamped, displayedComponents: .hourAndMinute)
+                        .datePickerStyle(.graphical).labelsHidden()
+                }
+                HStack {
+                    DatePicker("", selection: clamped, displayedComponents: .hourAndMinute)
+                        .datePickerStyle(.field).labelsHidden().fixedSize()
+                    Spacer()
+                    Button("−5") { clamped.wrappedValue = time.addingTimeInterval(-300) }.help("5 minutes earlier")
+                    Button("+5") { clamped.wrappedValue = time.addingTimeInterval(300) }.help("5 minutes later")
+                    Button("Now") { clamped.wrappedValue = Date() }
+                    Button("Done") { open = false }.keyboardShortcut(.defaultAction)
+                }
+                .controlSize(.small)
+            }
+            .padding(12)
+        }
+    }
+
+    /// Keeps the time at or before `latest` (a running record can't start in the future).
+    private var clamped: Binding<Date> {
+        Binding(get: { time }, set: { time = latest.map { l in min($0, l) } ?? $0 })
     }
 }
 
@@ -1050,15 +1083,11 @@ struct RunningStart: View {
     @State private var start = Date()
 
     var body: some View {
-        DatePicker("Start", selection: $start, in: ...Date(), displayedComponents: .hourAndMinute)
-            .labelsHidden()
-            .datePickerStyle(.field)
-            .controlSize(.small)
-            .fixedSize()
-            .help("Edit the start time")
+        TimePicker(time: $start, latest: Date())
+            .help("Change the start time")
             .onAppear { start = Date(timeIntervalSince1970: TimeInterval(record.t1)) }
             .onChange(of: record.t1) { t in start = Date(timeIntervalSince1970: TimeInterval(t)) }
-            // Debounced so typing "14:30" doesn't save 1, 14, 14:3 along the way.
+            // Debounced so clicking through the picker saves once, at the end.
             .task(id: start) {
                 try? await Task.sleep(nanoseconds: 900_000_000)
                 guard !Task.isCancelled else { return }
