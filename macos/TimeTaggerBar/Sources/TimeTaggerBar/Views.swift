@@ -7,6 +7,8 @@ struct MenuView: View {
     @State private var draft = ""
     @FocusState private var fieldFocused: Bool
     @State private var switching = false
+    /// Past days opened to their full log; today is always open.
+    @State private var expandedDays: Set<Date> = []
     @State private var editing: Record?
     @StateObject private var feed = DayFeed()
 
@@ -115,14 +117,36 @@ struct MenuView: View {
                         .font(.callout).foregroundStyle(.tertiary).padding(16)
                 }
                 ForEach(feed.days()) { day in
+                    let detailed = Calendar.current.isDateInToday(day.id) || expandedDays.contains(day.id)
                     Section {
-                        let groups = TaskGroup.group(day.records)
-                        ForEach(Array(groups.enumerated()), id: \.element.id) { i, g in
-                            TaskGroupRow(group: g, editing: $editing)
-                            if i + 1 < groups.count { GapRow(newer: g, older: groups[i + 1]) }
+                        if detailed {
+                            let groups = TaskGroup.group(day.records)
+                            ForEach(Array(groups.enumerated()), id: \.element.id) { i, g in
+                                TaskGroupRow(group: g, editing: $editing)
+                                if i + 1 < groups.count { GapRow(newer: g, older: groups[i + 1]) }
+                            }
+                        } else {
+                            // Past days: time per tag; the full log opens from the header.
+                            ForEach(Self.tagTotals(day.records), id: \.0) { tag, secs in
+                                HStack {
+                                    Text(tag == "untagged" ? "Untagged" : Record.isTicket(tag) ? tag.uppercased() : "#" + tag).lineLimit(1)
+                                    Spacer()
+                                    Text(Store.format(secs, seconds: false)).monospacedDigit().foregroundStyle(.secondary)
+                                }
+                                .font(.callout)
+                                .padding(.leading, 28).padding(.trailing, 12)
+                                .frame(height: 26)
+                                .contentShape(Rectangle())
+                                .onTapGesture { expandedDays.insert(day.id) }
+                            }
                         }
                     } header: {
-                        HStack {
+                        HStack(spacing: 6) {
+                            if !Calendar.current.isDateInToday(day.id) {
+                                Image(systemName: "chevron.right")
+                                    .font(.caption2.weight(.semibold))
+                                    .rotationEffect(.degrees(detailed ? 90 : 0))
+                            }
                             Text(Calendar.current.isDateInToday(day.id) ? "Today" : day.id.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated)))
                             Spacer()
                             Text(Store.format(day.records.reduce(0) { $0 + $1.duration(now: store.now) }, seconds: false))
@@ -133,6 +157,13 @@ struct MenuView: View {
                         .padding(.horizontal, 8)
                         .frame(height: 24)
                         .background(.bar)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            guard !Calendar.current.isDateInToday(day.id) else { return }
+                            withAnimation(.easeOut(duration: 0.15)) {
+                                if expandedDays.contains(day.id) { expandedDays.remove(day.id) } else { expandedDays.insert(day.id) }
+                            }
+                        }
                     }
                 }
                 if !feed.reachedEnd {
@@ -226,6 +257,15 @@ struct MenuView: View {
         draft = ""
         switching = false
         Task { await store.start(e.ds, tags: e.tags, at: e.start) }
+    }
+
+    /// A day's time per tag, biggest first; a record with several tags counts toward each.
+    static func tagTotals(_ records: [Record]) -> [(String, Int)] {
+        var sums: [String: Int] = [:]
+        for r in records {
+            for t in r.tags.isEmpty ? ["untagged"] : r.tags { sums[t, default: 0] += r.duration() }
+        }
+        return sums.sorted { $0.value > $1.value }
     }
 
     private func load(_ op: () async throws -> Void) async {
@@ -809,6 +849,7 @@ struct TagTotals: View {
                             Button { Task { await store.start(tag: tag) } } label: {
                             VStack(alignment: .leading, spacing: 4) {
                                 HStack {
+                                    if current { Circle().fill(.red).frame(width: 6, height: 6).accessibilityLabel("Running") }
                                     Text(Record.isTicket(tag) ? tag.uppercased() : "#" + tag)
                                         .lineLimit(1)
                                     Spacer()
@@ -827,7 +868,8 @@ struct TagTotals: View {
                             .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
-                            .disabled(current || tag == "untagged")
+                            // Not .disabled: that greys the row out and hides its bar.
+                            .allowsHitTesting(!current && tag != "untagged")
                             .help(current ? "Running" : "Start \(Record.isTicket(tag) ? tag.uppercased() : "#" + tag)")
                             .accessibilityLabel("Start \(tag)")
                         }
