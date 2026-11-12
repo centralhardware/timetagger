@@ -362,15 +362,23 @@ struct EditRecordView: View {
     @State private var end = Date()
     @State private var running = false
     @State private var tagText = ""
+    @State private var lastStart = Date()
 
     var body: some View {
         Form {
             TextField("Description", text: $record.ds)
             TextField("Tags", text: $tagText, prompt: Text("core-12 call"))
             TagSuggestions(text: $tagText, tags: store.tags)
-            DatePicker("Start", selection: $start)
+            // The day once, then plain hh:mm fields: a record almost always starts and ends on one day.
+            DatePicker("Day", selection: $start, displayedComponents: .date)
+            TimeRow(label: "Start", time: $start)
             Toggle("Running", isOn: $running)
-            if !running { DatePicker("End", selection: $end) }
+            if !running {
+                TimeRow(label: "End", time: $end)
+                LabeledContent("Duration") {
+                    Text(Store.format(max(0, Int(end.timeIntervalSince(start))), seconds: false)).monospacedDigit()
+                }
+            }
             if invalid {
                 Text("End must be after start.").font(.caption).foregroundStyle(.red)
             }
@@ -382,6 +390,12 @@ struct EditRecordView: View {
             end = Date(timeIntervalSince1970: TimeInterval(record.t2))
             running = record.isRunning
             tagText = record.tags.joined(separator: " ")
+            lastStart = start
+        }
+        // Moving the day (or start) carries the end along, so the duration is kept.
+        .onChange(of: start) { new in
+            if !Calendar.current.isDate(new, inSameDayAs: lastStart) { end = end.addingTimeInterval(new.timeIntervalSince(lastStart)) }
+            lastStart = new
         }
         .toolbar {
             ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
@@ -401,6 +415,27 @@ struct EditRecordView: View {
 
     /// A finished record whose end isn't after its start can't be saved (it used to be silently clamped).
     private var invalid: Bool { !running && end <= start }
+}
+
+/// An hh:mm field with quick nudges: −5 / +5 minutes and Now.
+struct TimeRow: View {
+    let label: String
+    @Binding var time: Date
+
+    var body: some View {
+        LabeledContent(label) {
+            HStack(spacing: 6) {
+                DatePicker(label, selection: $time, displayedComponents: .hourAndMinute)
+                    .labelsHidden()
+                    .datePickerStyle(.field)
+                Button("−5") { time = time.addingTimeInterval(-300) }.help("5 minutes earlier")
+                Button("+5") { time = time.addingTimeInterval(300) }.help("5 minutes later")
+                Button("Now") { time = Date() }
+            }
+            .controlSize(.small)
+            .monospacedDigit()
+        }
+    }
 }
 
 enum SettingsSection: String, CaseIterable, Identifiable {
