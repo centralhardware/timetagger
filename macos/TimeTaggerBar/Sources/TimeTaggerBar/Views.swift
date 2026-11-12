@@ -399,7 +399,7 @@ struct InlineEditor: View {
                 DatePicker("Day", selection: $start, displayedComponents: .date)
                     .labelsHidden().datePickerStyle(.field)
                 Spacer()
-                Toggle("Running", isOn: $running).toggleStyle(.checkbox)
+                if canRun { Toggle("Running", isOn: $running).toggleStyle(.checkbox) }
             }
             TimeRow(label: "Start", time: $start)
             if !running {
@@ -433,6 +433,11 @@ struct InlineEditor: View {
             .padding(.horizontal, 8)
             .frame(height: 26)
             .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+    }
+
+    /// Only the newest record (nothing logged after it) can be set running again.
+    private var canRun: Bool {
+        original.isRunning || !(store.lately + store.records).contains { !$0.isDeleted && $0.key != original.key && $0.t1 > original.t1 }
     }
 
     /// A finished record whose end isn't after its start can't be saved.
