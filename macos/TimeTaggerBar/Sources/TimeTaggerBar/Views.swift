@@ -5,7 +5,7 @@ struct MenuView: View {
     @EnvironmentObject var store: Store
     @Environment(\.openWindow) private var openWindow
     @State private var draft = ""
-    @State private var draftTags = ""
+    @FocusState private var fieldFocused: Bool
     @State private var editing: Record?
     @StateObject private var feed = DayFeed()
 
@@ -21,7 +21,9 @@ struct MenuView: View {
                 } else {
                     idleCard
                 }
+                RecentTasks()
                 Divider()
+                DayTimeline(editing: $editing)
                 TagTotals()
                 Spacer(minLength: 0)
                 footer
@@ -36,6 +38,8 @@ struct MenuView: View {
                 .frame(width: 340)
         }
         .frame(height: 480)
+        // Opening the popover puts the cursor in the task field: type and press Return.
+        .onAppear { fieldFocused = true }
         // Reload whenever the store has refreshed (a write here or anywhere else).
         .task(id: store.lately.hashValue) { await load { try await feed.reload(store.api) } }
     }
@@ -102,8 +106,10 @@ struct MenuView: View {
                 }
                 ForEach(feed.days()) { day in
                     Section {
-                        ForEach(TaskGroup.group(day.records)) { g in
+                        let groups = TaskGroup.group(day.records)
+                        ForEach(Array(groups.enumerated()), id: \.element.id) { i, g in
                             TaskGroupRow(group: g, editing: $editing)
+                            if i + 1 < groups.count { GapRow(newer: g, older: groups[i + 1]) }
                         }
                     } header: {
                         HStack {
@@ -183,35 +189,41 @@ struct MenuView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    /// One field for everything: "SM-1176 fix login #call 25m ago".
     private func taskField(_ prompt: String, icon: String?) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        let parsed = QuickEntry.parse(draft)
+        return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 if let icon { Image(systemName: icon).foregroundStyle(.secondary) }
                 TextField(prompt, text: $draft)
                     .textFieldStyle(.plain)
-                    .onSubmit(startDraft)
-                Divider().frame(height: 18)
-                Image(systemName: "number").foregroundStyle(.secondary)
-                TextField("tags", text: $draftTags)
-                    .textFieldStyle(.plain)
-                    .frame(width: 110)
+                    .focused($fieldFocused)
                     .onSubmit(startDraft)
             }
             .padding(.horizontal, 8)
             .frame(height: 28)
             .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            TagSuggestions(text: $draftTags, tags: store.tags)
+            .help("Ticket keys and #words become tags; end with \u{201C}25m ago\u{201D} or \u{201C}at 14:30\u{201D} to backdate")
+            HashSuggestions(text: $draft, tags: store.tags)
+            // Shows how the line will be read before Return, so nothing is a surprise.
+            if !parsed.isEmpty && (!parsed.tags.isEmpty || parsed.start != nil) {
+                HStack(spacing: 6) {
+                    if let t = parsed.start { Text("from \(store.clock(t))") }
+                    if !parsed.tags.isEmpty { TagLine(tags: parsed.tags) }
+                }
+                .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+            } else if draft.isEmpty {
+                Text("e.g. SM-1176 fix login #call 25m ago").font(.caption).foregroundStyle(.tertiary)
+            }
         }
     }
 
     /// Return in an empty field does nothing rather than log a blank "Untitled" record.
     private func startDraft() {
-        let ds = draft.trimmingCharacters(in: .whitespaces)
-        let tags = Record.parseTags(draftTags)
-        guard !ds.isEmpty || !tags.isEmpty else { return }
+        let e = QuickEntry.parse(draft)
+        guard !e.isEmpty else { return }
         draft = ""
-        draftTags = ""
-        Task { await store.start(ds, tags: tags) }
+        Task { await store.start(e.ds, tags: e.tags, at: e.start) }
     }
 
     private func load(_ op: () async throws -> Void) async {
@@ -745,11 +757,12 @@ struct SessionRow: View {
                 TagLine(tags: record.extraTags).foregroundStyle(.tertiary)
             }
             Spacer(minLength: 4)
-            if hover && !record.isRunning {
+            if !record.isRunning && !secondary {
                 Button { Task { await store.start(record.ds, tags: record.tags) } } label: {
                     Image(systemName: "play.fill").font(.caption)
                 }
                 .buttonStyle(.borderless)
+                .foregroundStyle(hover ? HierarchicalShapeStyle.primary : HierarchicalShapeStyle.quaternary)
                 .help("Resume")
                 .accessibilityLabel("Resume \(record.title)")
             }
@@ -808,6 +821,114 @@ struct TagTotals: View {
                                 }
                                 .frame(height: 4)
                             }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Between two rows: an untracked gap (Fill) or an overlap (Trim), both fixed by moving the earlier end.
+struct GapRow: View {
+    @EnvironmentObject var store: Store
+    let newer: TaskGroup
+    let older: TaskGroup
+
+    var body: some View {
+        let earlier = older.first          // newest session of the older row
+        let laterStart = newer.records.last!.t1
+        let delta = laterStart - earlier.t2
+        if !earlier.isRunning, delta >= 5 * 60 || delta <= -60, delta < 4 * 3600 {
+            HStack(spacing: 6) {
+                Rectangle().fill(delta > 0 ? Color.secondary.opacity(0.3) : Color.orange.opacity(0.6)).frame(width: 2, height: 14)
+                Text(delta > 0 ? "\(Store.format(delta, seconds: false)) untracked" : "\(Store.format(-delta, seconds: false)) overlap")
+                Spacer()
+                Button(delta > 0 ? "Fill" : "Trim") { Task { await store.setEnd(earlier, to: laterStart) } }
+                    .buttonStyle(.borderless)
+                    .help(delta > 0 ? "Extend \u{201C}\(earlier.title)\u{201D} to \(store.clock(laterStart))" : "End \u{201C}\(earlier.title)\u{201D} at \(store.clock(laterStart))")
+            }
+            .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+            .padding(.leading, 30).padding(.trailing, 12)
+            .frame(height: 20)
+        }
+    }
+}
+
+/// The last three tasks as chips: one click (or ⌘1–3) resumes one.
+struct RecentTasks: View {
+    @EnvironmentObject var store: Store
+
+    var body: some View {
+        let recent = store.recentTasks
+        if !recent.isEmpty {
+            HStack(spacing: 6) {
+                ForEach(Array(recent.enumerated()), id: \.element.id) { i, r in
+                    Button { Task { await store.start(r.ds, tags: r.tags) } } label: {
+                        Label(r.title, systemImage: "play.fill").lineLimit(1)
+                    }
+                    .buttonStyle(.bordered).controlSize(.small)
+                    .keyboardShortcut(KeyEquivalent(Character(String(i + 1))), modifiers: .command)
+                    .help("Resume (⌘\(i + 1))")
+                }
+            }
+        }
+    }
+}
+
+/// Today as one bar from the first start to now; each record is a segment, click one to edit it.
+struct DayTimeline: View {
+    @EnvironmentObject var store: Store
+    @Binding var editing: Record?
+
+    var body: some View {
+        let start = Int(Calendar.current.startOfDay(for: Date()).timeIntervalSince1970)
+        let recs = store.lately.filter { !$0.isDeleted && ($0.isRunning ? store.now : $0.t2) > start }
+        if let first = recs.map({ max($0.t1, start) }).min() {
+            let span = CGFloat(max(store.now - first, 60))
+            VStack(alignment: .leading, spacing: 4) {
+                GeometryReader { g in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.primary.opacity(0.06))
+                        ForEach(recs) { r in
+                            let a = CGFloat(max(r.t1, first) - first), b = CGFloat((r.isRunning ? store.now : r.t2) - first)
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(r.isRunning ? Color.red.opacity(0.7) : Color.accentColor.opacity(0.7))
+                                .frame(width: max(2, (b - a) / span * g.size.width))
+                                .offset(x: a / span * g.size.width)
+                                .help("\(r.title) \(store.range(r))")
+                                .onTapGesture { editing = r }
+                        }
+                    }
+                }
+                .frame(height: 10)
+                HStack {
+                    Text(store.clock(first)); Spacer(); Text(store.clock(store.now))
+                }
+                .font(.caption2).foregroundStyle(.tertiary).monospacedDigit()
+            }
+        }
+    }
+}
+
+/// Suggests tags for a "#par" being typed at the end of the task field.
+struct HashSuggestions: View {
+    @Binding var text: String
+    let tags: [String]
+
+    var body: some View {
+        let last = text.split(separator: " ", omittingEmptySubsequences: false).last.map(String.init) ?? ""
+        if last.hasPrefix("#"), last.count > 1 {
+            let p = last.dropFirst().lowercased()
+            let matches = Array(tags.filter { $0.hasPrefix(p) && $0 != p }.prefix(5))
+            if !matches.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(matches, id: \.self) { tag in
+                            Button("#" + tag) {
+                                text = String(text.dropLast(last.count)) + "#" + tag + " "
+                            }
+                            .buttonStyle(.bordered).controlSize(.small)
                         }
                     }
                 }
