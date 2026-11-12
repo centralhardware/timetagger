@@ -76,21 +76,48 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
         closedAt = Date()
     }
 
-    /// Tears the popover off into a normal window, moved by `offset` from where the popover was
-    /// (SwiftUI content swallows the drag AppKit's own detaching needs, so the view asks for it).
-    func popOut(offset: CGSize = .zero) {
+    /// Tears the popover off into a window that looks the same (popover material, rounded,
+    /// no title bar) and keeps following the mouse: the drag that started in the popover
+    /// carries on moving the new window. SwiftUI content swallows the drag AppKit's own
+    /// detaching needs, so the view asks for this when a drag begins.
+    func popOut(dragging: Bool = false) {
         guard window == nil else { return }
-        let origin = popover.contentViewController?.view.window?.frame.origin ?? .zero
+        let frame = popover.contentViewController?.view.window?.frame ?? .zero
         popover.performClose(nil)
-        let w = NSWindow(contentViewController: NSHostingController(rootView: MenuView().environmentObject(store)))
-        w.title = "TimeTaggerBar"
-        w.styleMask = [.titled, .closable, .miniaturizable]
+
+        let host = NSHostingView(rootView: MenuView().environmentObject(store))
+        let blur = NSVisualEffectView()
+        blur.material = .popover
+        blur.blendingMode = .behindWindow
+        blur.state = .active
+        blur.wantsLayer = true
+        blur.layer?.cornerRadius = 10
+        blur.layer?.masksToBounds = true
+        host.translatesAutoresizingMaskIntoConstraints = false
+        blur.addSubview(host)
+        NSLayoutConstraint.activate([
+            host.leadingAnchor.constraint(equalTo: blur.leadingAnchor), host.trailingAnchor.constraint(equalTo: blur.trailingAnchor),
+            host.topAnchor.constraint(equalTo: blur.topAnchor), host.bottomAnchor.constraint(equalTo: blur.bottomAnchor),
+        ])
+
+        let w = NSWindow(contentRect: frame, styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
+        w.titleVisibility = .hidden
+        w.titlebarAppearsTransparent = true
+        w.isMovableByWindowBackground = true
+        w.isOpaque = false
+        w.backgroundColor = .clear
+        w.hasShadow = true
         w.isReleasedWhenClosed = false
         w.delegate = self
-        w.setFrameOrigin(NSPoint(x: origin.x + offset.width, y: origin.y - offset.height))
+        w.contentView = blur
+        w.setFrame(frame, display: true)
         w.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         window = w
+        // Hand the ongoing mouse drag to the new window so it detaches under the cursor.
+        if dragging, let event = NSApp.currentEvent, event.type == .leftMouseDragged || event.type == .leftMouseDown {
+            w.performDrag(with: event)
+        }
     }
 
     /// Closing the torn-off window brings back the usual popover on the next click.

@@ -194,7 +194,7 @@ final class Store: ObservableObject {
     /// Menu bar text: today's total, preceded by the running timer when there is one.
     var menuTitle: String {
         let today = Self.format(todayTotal, seconds: false)
-        guard let r = running.first else { return idleInWorkHours ? "Not tracking · " + today : today }
+        guard let r = running.first else { return today }
         return Self.format(r.duration(now: now), seconds: false) + " · " + today
     }
 
@@ -383,6 +383,15 @@ final class Store: ObservableObject {
         var r = record
         r.t2 = max(t, r.t1 + 1)
         await save([r], label: "Adjusted \u{201C}\(record.title)\u{201D}", before: [record])
+    }
+
+    /// Joins back-to-back sessions into the earliest one, which then runs to the latest end.
+    func merge(_ recs: [Record]) async {
+        let sorted = recs.sorted { $0.t1 < $1.t1 }
+        guard var first = sorted.first, let last = sorted.last, sorted.count > 1 else { return }
+        first.t2 = last.isRunning ? first.t1 : last.t2
+        let gone = sorted.dropFirst().map { r -> Record in var r = r; r.deleted = 1; return r }
+        await save([first] + gone, label: "Merged \(sorted.count) sessions", before: sorted)
     }
 
     func update(_ record: Record) async {
