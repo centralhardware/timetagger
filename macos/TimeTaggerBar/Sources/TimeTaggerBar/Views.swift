@@ -192,22 +192,32 @@ struct MenuView: View {
     }
 
     /// The one rich moment of the popover: the clock that is running.
+    /// The running task first: ticket and description lead, the clock is supporting detail.
     private func runningCard(_ r: Record) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Circle().fill(.red).frame(width: 6, height: 6).accessibilityLabel("Running")
-                Text("Since")
-                RunningStart(record: r)
-                if store.showsWorkZone {
-                    Text("·").foregroundStyle(.tertiary)
-                    Text("\(store.clock(r.t1, work: true)) \(store.workZoneName)")
+                if let t = r.ticket {
+                    Text(t).font(.caption.monospaced().weight(.semibold))
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(Color.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                } else {
+                    Text("Now").font(.caption.weight(.medium)).foregroundStyle(.secondary)
                 }
             }
-            .font(.caption).foregroundStyle(.secondary).monospacedDigit()
-            // Clock and Stop share a row; the task text gets the full width below.
-            HStack(alignment: .center, spacing: 8) {
+            RunningText(record: r)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(Store.format(r.duration(now: store.now)))
-                    .font(.system(size: 40, weight: .light, design: .rounded)).monospacedDigit()
+                    .font(.system(.title2, design: .rounded).weight(.light)).monospacedDigit()
+                HStack(spacing: 4) {
+                    Text("since")
+                    RunningStart(record: r)
+                    if store.showsWorkZone {
+                        Text("· \(store.clock(r.t1, work: true)) \(store.workZoneName)")
+                    }
+                }
+                .font(.caption).foregroundStyle(.secondary).monospacedDigit()
                 Spacer(minLength: 8)
                 Button { Task { await store.stop(r) } } label: {
                     Label("Stop", systemImage: "stop.fill")
@@ -215,8 +225,6 @@ struct MenuView: View {
                 .keyboardShortcut(".", modifiers: .command)
                 .help("Stop (⌘.)")
             }
-            RunningText(record: r)
-                .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1114,6 +1122,11 @@ struct RunningStart: View {
 }
 
 extension Record {
+    /// Description with "#tag" text at the end, without the ticket.
+    var textWithTags: String {
+        ([ds] + tags.map { "#" + $0 }).filter { !$0.isEmpty }.joined(separator: " ")
+    }
+
     /// Description with tags at the end as plain "#tag" text: the one-field form used for editing.
     var editText: String {
         ([ticket ?? "", ds] + tags.map { "#" + $0 }).filter { !$0.isEmpty }.joined(separator: " ")
@@ -1139,12 +1152,12 @@ struct RunningText: View {
         VStack(alignment: .leading, spacing: 4) {
             TextField("What are you working on? #tags", text: $text, axis: .vertical)
                 .textFieldStyle(.plain)
-                .font(.headline)
+                .font(.title3.weight(.semibold))
                 .lineLimit(1...3)
                 .focused($focused)
                 .onSubmit(save)
-                .onAppear { text = record.editText }
-                .onChange(of: record.editText) { t in if !focused { text = t } }
+                .onAppear { text = record.textWithTags }
+                .onChange(of: record.textWithTags) { t in if !focused { text = t } }
                 .onChange(of: focused) { f in if !f { save() } }
                 .help("Edit the running task; Return saves")
             if focused { HashSuggestions(text: $text, tags: store.tags) }
@@ -1153,10 +1166,13 @@ struct RunningText: View {
 
     private func save() {
         let e = QuickEntry.parse(text)
-        guard !e.isEmpty, e.ds != record.ds || e.ticket != record.ticket || e.tags != record.tags else { return }
+        // The ticket sits in the badge above; typing a key here replaces it.
+        let ticket = e.ticket ?? record.ticket
+        guard !e.ds.isEmpty || !e.tags.isEmpty || ticket != nil,
+              e.ds != record.ds || ticket != record.ticket || e.tags != record.tags else { return }
         var r = record
         r.ds = e.ds
-        r.ticket = e.ticket
+        r.ticket = ticket
         r.tags = e.tags
         Task { await store.update(r) }
     }
