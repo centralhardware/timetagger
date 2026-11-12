@@ -1,14 +1,15 @@
 import Foundation
 
 /// One line typed into the task field, e.g. "SM-1176 fix login #call 25m ago":
-/// ticket keys and #words become tags, "25m ago" / "1h ago" / "at 14:30" backdate the start.
+/// the first ticket key becomes the ticket, #words become tags, "25m ago" / "1h ago" / "at 14:30" backdate the start.
 struct QuickEntry: Equatable {
     var ds = ""
+    var ticket: String?
     var tags: [String] = []
     /// Start time when the text names one; nil means now.
     var start: Int?
 
-    var isEmpty: Bool { ds.isEmpty && tags.isEmpty }
+    var isEmpty: Bool { ds.isEmpty && tags.isEmpty && ticket == nil }
 
     static func parse(_ text: String, now: Date = Date(), calendar: Calendar = .current) -> QuickEntry {
         var e = QuickEntry()
@@ -29,8 +30,8 @@ struct QuickEntry: Equatable {
         for w in words {
             if w.hasPrefix("#") {
                 e.tags += Record.parseTags(w).filter { !e.tags.contains($0) }
-            } else if Record.isTicket(w.lowercased()), !e.tags.contains(w.lowercased()) {
-                e.tags.append(w.lowercased())
+            } else if e.ticket == nil, Record.isTicket(w.lowercased()) {
+                e.ticket = w.uppercased()
             } else {
                 rest.append(w)
             }

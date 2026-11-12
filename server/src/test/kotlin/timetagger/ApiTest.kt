@@ -277,7 +277,7 @@ class ApiTest {
         val start = Instant.parse("2026-10-28T08:00:00Z")
         coroutineScope {
             // Slow takes the lock first and holds it a while before writing.
-            val slow = async { db.write(alice) { s -> Thread.sleep(500); repo.create(s, alice, start, null, "slow", emptyList(), null) } }
+            val slow = async { db.write(alice) { s -> Thread.sleep(500); repo.create(s, alice, start, null, "slow", null, emptyList(), null) } }
             delay(100)
             val fast = async { records.create(alice, RecordInput(start = start, description = "fast")) }
             val (a, b) = slow.await() to fast.await()

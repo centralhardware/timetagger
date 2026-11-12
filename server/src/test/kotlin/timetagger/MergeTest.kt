@@ -74,4 +74,21 @@ class MergeTest {
         // Nothing left: a second round writes nothing.
         assertEquals(0, merge.mergeRecent(alice, now = at(10_000)))
     }
+
+    @Test
+    fun ticketIsItsOwnFieldAndSurvivesStopAndMerge() = runBlocking {
+        val records = RecordService(db, RecordRepository())
+        val alice = db.io { UserRepository().byName(it, "alice") }!!.id
+        fun at(s: Long) = t0.plusSeconds(s)
+        val a = records.create(alice, RecordInput(start = at(0), stop = at(600), ticket = " sm-1176 ", tags = listOf("call")))
+        assertEquals("SM-1176" to listOf("call"), a.ticket to a.tags)
+        // Starting another record stops the running one without losing its ticket.
+        val running = records.create(alice, RecordInput(start = at(601), ticket = "SM-1176"))
+        records.create(alice, RecordInput(start = at(900), stop = at(1000)))
+        assertEquals("SM-1176", db.io { RecordRepository().get(it, alice, running.id) }!!.ticket)
+        // A different ticket keeps records apart in a merge.
+        val chains = merge.chains(listOf(rec(1, 0, 60).copy(ticket = "SM-1"), rec(2, 61, 60).copy(ticket = "SM-2")))
+        assertEquals(2, chains.size)
+        kotlin.test.assertFailsWith<Invalid> { records.create(alice, RecordInput(start = at(2000), ticket = "not a key")) }
+    }
 }

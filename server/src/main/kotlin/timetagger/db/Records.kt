@@ -20,7 +20,7 @@ data class RecordFilter(
 
 class RecordRepository {
     private val select = """
-        SELECT r.id, r.start_at, r.stop_at, r.description, r.deleted_at, r.revision,
+        SELECT r.id, r.start_at, r.stop_at, r.description, r.ticket, r.deleted_at, r.revision,
                array(SELECT t.tag FROM record_tags t WHERE t.record_id = r.id ORDER BY t.tag) AS tags
         FROM records r
     """.trimIndent()
@@ -30,6 +30,7 @@ class RecordRepository {
         start = row.instant("start_at"),
         stop = row.instantOrNull("stop_at"),
         description = row.string("description"),
+        ticket = row.stringOrNull("ticket"),
         tags = row.array<String>("tags").toList(),
         deletedAt = row.instantOrNull("deleted_at"),
         revision = row.long("revision"),
@@ -44,7 +45,7 @@ class RecordRepository {
             params["tag$i"] = tag.removePrefix("#").lowercase()
         }
         f.text?.let {
-            where += "(r.description ILIKE :text ESCAPE '\\' OR EXISTS (SELECT 1 FROM record_tags t WHERE t.record_id = r.id AND t.tag ILIKE :text ESCAPE '\\'))"
+            where += "(r.description ILIKE :text ESCAPE '\\' OR r.ticket ILIKE :text ESCAPE '\\' OR EXISTS (SELECT 1 FROM record_tags t WHERE t.record_id = r.id AND t.tag ILIKE :text ESCAPE '\\'))"
             params["text"] = "%" + it.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
         }
         f.running?.let { where += if (it) "r.stop_at IS NULL" else "r.stop_at IS NOT NULL" }
@@ -74,18 +75,18 @@ class RecordRepository {
     /** Creates the record (the database picks the id) with a new revision and its tags. */
     fun create(
         session: Session, userId: Long, start: Instant, stop: Instant?,
-        description: String, tags: List<String>, deletedAt: Instant?,
+        description: String, ticket: String?, tags: List<String>, deletedAt: Instant?,
     ): Record {
         val id = session.single(
             queryOf(
                 """
-                INSERT INTO records (user_id, start_at, stop_at, description, deleted_at)
-                VALUES (:user, :start, :stop, :description, :deleted)
+                INSERT INTO records (user_id, start_at, stop_at, description, ticket, deleted_at)
+                VALUES (:user, :start, :stop, :description, :ticket, :deleted)
                 RETURNING id
                 """,
                 mapOf(
                     "user" to userId, "start" to start, "stop" to stop,
-                    "description" to description, "deleted" to deletedAt,
+                    "description" to description, "ticket" to ticket, "deleted" to deletedAt,
                 ),
             ),
         ) { it.long("id") }!!
@@ -95,18 +96,18 @@ class RecordRepository {
     /** Replaces the record's fields, stamps a new revision and rewrites its tags. */
     fun update(
         session: Session, userId: Long, id: Long, start: Instant, stop: Instant?,
-        description: String, tags: List<String>, deletedAt: Instant?,
+        description: String, ticket: String?, tags: List<String>, deletedAt: Instant?,
     ): Record {
         session.update(
             queryOf(
                 """
-                UPDATE records SET start_at = :start, stop_at = :stop, description = :description,
+                UPDATE records SET start_at = :start, stop_at = :stop, description = :description, ticket = :ticket,
                     deleted_at = :deleted, updated_at = now(), revision = nextval('revision_seq')
                 WHERE user_id = :user AND id = :id
                 """,
                 mapOf(
                     "user" to userId, "id" to id, "start" to start, "stop" to stop,
-                    "description" to description, "deleted" to deletedAt,
+                    "description" to description, "ticket" to ticket, "deleted" to deletedAt,
                 ),
             ),
         )

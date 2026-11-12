@@ -14,6 +14,8 @@ struct Record: Codable, Identifiable, Hashable {
     var tags: [String] = []
     var deleted: Int?
     var st: Double?
+    /// Upper case ticket key such as "SM-1176", kept apart from the description and tags.
+    var ticket: String? = nil
 
     var id: String { key }
     var isRunning: Bool { t1 == t2 }
@@ -108,6 +110,7 @@ private struct WireRecord: Codable {
     var start: Date
     var stop: Date?
     var description: String
+    var ticket: String?
     var tags: [String]?
     var deleted: Bool?
     var deletedAt: Date?
@@ -118,6 +121,7 @@ private struct WireRecord: Codable {
         start = Date(timeIntervalSince1970: TimeInterval(r.t1))
         stop = r.isRunning ? nil : Date(timeIntervalSince1970: TimeInterval(r.t2))
         description = r.ds
+        ticket = r.ticket
         tags = r.tags
         deleted = r.isDeleted
         revision = r.rev == 0 ? nil : r.rev
@@ -128,7 +132,7 @@ private struct WireRecord: Codable {
         return Record(
             key: id.map(String.init) ?? "", rev: revision ?? 0, t1: t1,
             t2: stop.map { Int($0.timeIntervalSince1970) } ?? t1, ds: description,
-            tags: tags ?? [], deleted: deletedAt == nil ? 0 : 1, st: nil
+            tags: tags ?? [], deleted: deletedAt == nil ? 0 : 1, st: nil, ticket: ticket
         )
     }
 }

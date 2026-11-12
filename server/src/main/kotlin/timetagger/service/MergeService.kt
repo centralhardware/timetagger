@@ -54,8 +54,8 @@ class MergeService(
             for (chain in found) {
                 val first = chain.records.first()
                 val last = chain.records.last()
-                records.update(session, userId, first.id, first.start, last.stop, first.description, mergedTags(chain), null)
-                for (r in chain.records.drop(1)) records.update(session, userId, r.id, r.start, r.stop, r.description, r.tags, now)
+                records.update(session, userId, first.id, first.start, last.stop, first.description, first.ticket, mergedTags(chain), null)
+                for (r in chain.records.drop(1)) records.update(session, userId, r.id, r.start, r.stop, r.description, r.ticket, r.tags, now)
                 log.info("Merged {} records into {} ({})", chain.records.size, first.id, first.description)
             }
             found.size
@@ -78,7 +78,7 @@ class MergeService(
             }
             val prev = current.lastOrNull()
             val gapToPrev = prev?.stop?.let { Duration.between(it, r.start) }
-            if (prev != null && prev.description.trim() == r.description.trim() && clean(prev.tags) == clean(r.tags) &&
+            if (prev != null && prev.description.trim() == r.description.trim() && prev.ticket == r.ticket && clean(prev.tags) == clean(r.tags) &&
                 gapToPrev != null && !gapToPrev.isNegative && gapToPrev <= gap
             ) {
                 current += r
