@@ -2,10 +2,13 @@ name: CI
 
 on:
   workflow_dispatch:
+  # Server tests only when something the server is built from changes; a client-only change skips them.
   push:
     branches: [ main ]
+    paths: ["server/**", "deploy/**", ".github/workflows/ci.yml"]
   pull_request:
     branches: [ main ]
+    paths: ["server/**", "deploy/**", ".github/workflows/ci.yml"]
 
 jobs:
   server:

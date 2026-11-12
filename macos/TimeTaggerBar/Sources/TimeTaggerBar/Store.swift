@@ -192,8 +192,9 @@ final class Store: ObservableObject {
     /// Menu bar text: today's total, preceded by the running timer when there is one.
     var menuTitle: String {
         let today = Self.format(todayTotal, seconds: false)
-        guard let r = running.first else { return today }
-        return Self.format(r.duration(now: now), seconds: false) + " · " + today
+        guard let r = running.first else { return idleInWorkHours ? "Not tracking · " + today : today }
+        let ticket = r.tags.first(where: Record.isTicket).map { $0.uppercased() + " " } ?? ""
+        return ticket + Self.format(r.duration(now: now), seconds: false) + " · " + today
     }
 
     var totalsByTag: [(String, Int)] {
@@ -262,13 +263,18 @@ final class Store: ObservableObject {
     }
 
     /// A notification when nothing is tracked during working hours on a weekday, at most every 30 minutes.
-    private func nagIfIdle() {
-        guard remindIdle, signedIn, running.isEmpty else { return }
+    /// Signed in, nothing running, inside working hours on a weekday.
+    var idleInWorkHours: Bool {
+        guard signedIn, running.isEmpty else { return false }
         var cal = Calendar.current
         cal.timeZone = workTimeZone
         let date = Date(timeIntervalSince1970: TimeInterval(now))
         let hour = cal.component(.hour, from: date)
-        guard !cal.isDateInWeekend(date), hour >= workStartHour, hour < workEndHour else { return }
+        return !cal.isDateInWeekend(date) && hour >= workStartHour && hour < workEndHour
+    }
+
+    private func nagIfIdle() {
+        guard remindIdle, idleInWorkHours else { return }
         // Give a short break a chance, and don't repeat too often.
         let lastStop = lately.map(\.t2).max() ?? 0
         guard now - lastStop > 15 * 60, now - lastNagged > 30 * 60 else { return }
@@ -304,8 +310,9 @@ final class Store: ObservableObject {
     }
 
     /// Starts a new record, stopping whatever is running (like the web app's default).
-    func start(_ description: String, tags: [String] = []) async {
-        let t = Int(Date().timeIntervalSince1970)
+    /// `at` backdates the start (from "25m ago" in the task field); whatever was running stops there.
+    func start(_ description: String, tags: [String] = [], at: Int? = nil) async {
+        let t = min(at ?? Int(Date().timeIntervalSince1970), Int(Date().timeIntervalSince1970))
         let stopped = running.map { r -> Record in var r = r; r.t2 = max(t, r.t1 + 1); return r }
         let new = Record(key: Record.newKey(), rev: 0, t1: t, t2: t, ds: description.trimmingCharacters(in: .whitespaces), tags: tags, deleted: 0)
         await save(stopped + [new], label: "Started \u{201C}\(new.ds)\u{201D}", before: running)
@@ -324,6 +331,24 @@ final class Store: ObservableObject {
         let t = Int(Date().timeIntervalSince1970)
         let targets = record.map { [$0] } ?? running
         await save(targets.map { var r = $0; r.t2 = max(t, r.t1 + 1); return r }, label: "Stopped", before: targets)
+    }
+
+    /// The last few distinct tasks (description + tags), newest first, for one-click resume.
+    var recentTasks: [Record] {
+        var seen = Set<String>(), out: [Record] = []
+        for r in (lately + records).sorted(by: { $0.t1 > $1.t1 }) where !r.isRunning && !r.isDeleted {
+            let k = r.ds.lowercased() + "|" + r.tags.sorted().joined(separator: ",")
+            if seen.insert(k).inserted { out.append(r) }
+            if out.count == 3 { break }
+        }
+        return out
+    }
+
+    /// Closes a gap or removes an overlap by moving the earlier record's end to `t`.
+    func setEnd(_ record: Record, to t: Int) async {
+        var r = record
+        r.t2 = max(t, r.t1 + 1)
+        await save([r], label: "Adjusted \u{201C}\(record.title)\u{201D}", before: [record])
     }
 
     func update(_ record: Record) async {
