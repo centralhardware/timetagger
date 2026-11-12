@@ -1035,6 +1035,8 @@ struct RecentTasks: View {
 struct DayTimeline: View {
     @EnvironmentObject var store: Store
     @Binding var editing: Record?
+    /// The segment whose editor is open, shown right at the segment rather than down in the history.
+    @State private var selected: String?
 
     var body: some View {
         let start = Int(store.workCalendar.startOfDay(for: Date()).timeIntervalSince1970)
@@ -1054,7 +1056,14 @@ struct DayTimeline: View {
                                 .frame(width: max(2, (b - a) / span * g.size.width - 1))
                                 .offset(x: a / span * g.size.width)
                                 .help("\(r.title) \(store.range(r))")
-                                .onTapGesture { editing = editing?.id == r.id ? nil : r }
+                                .onTapGesture { selected = selected == r.id ? nil : r.id }
+                                .popover(isPresented: Binding(get: { selected == r.id }, set: { if !$0 { selected = nil } }),
+                                         arrowEdge: .bottom) {
+                                    InlineEditor(record: r) { selected = nil }
+                                        .environmentObject(store)
+                                        .frame(width: 340)
+                                        .padding(8)
+                                }
                         }
                     }
                 }
