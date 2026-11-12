@@ -1033,11 +1033,12 @@ struct RecentTasks: View {
             HStack(spacing: 6) {
                 ForEach(Array(recent.enumerated()), id: \.element.id) { i, r in
                     Button { Task { await store.resume(r) } } label: {
-                        Label(r.title, systemImage: "play.fill").lineLimit(1)
+                        // Ticket first when there is one, so the chips read the same way.
+                        Label(r.ticket ?? r.title, systemImage: "play.fill").lineLimit(1)
                     }
                     .buttonStyle(.bordered).controlSize(.small)
                     .keyboardShortcut(KeyEquivalent(Character(String(i + 1))), modifiers: .command)
-                    .help("Resume (⌘\(i + 1))")
+                    .help("Resume \u{201C}\(r.title)\u{201D} (⌘\(i + 1))")
                 }
             }
         }
