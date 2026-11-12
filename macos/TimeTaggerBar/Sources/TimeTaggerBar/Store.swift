@@ -194,7 +194,7 @@ final class Store: ObservableObject {
     /// Menu bar text: today's total, preceded by the running timer when there is one.
     var menuTitle: String {
         let today = Self.format(todayTotal, seconds: false)
-        guard let r = running.first else { return idleInWorkHours ? "Not tracking · " + today : today }
+        guard let r = running.first else { return today }
         return Self.format(r.duration(now: now), seconds: false) + " · " + today
     }
 
