@@ -43,7 +43,13 @@ struct MenuView: View {
 
     @ViewBuilder private var banners: some View {
         if let err = store.error {
-            Label(err, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.secondary).lineLimit(3)
+            HStack(alignment: .top) {
+                Label(err, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.secondary).lineLimit(3)
+                Spacer(minLength: 4)
+                Button { store.error = nil } label: { Image(systemName: "xmark").font(.caption2) }
+                    .buttonStyle(.borderless).foregroundStyle(.tertiary)
+                    .help("Dismiss").accessibilityLabel("Dismiss error")
+            }
         }
         if let u = store.undoable {
             HStack {
@@ -91,6 +97,10 @@ struct MenuView: View {
     private var daySection: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0, pinnedViews: .sectionHeaders) {
+                if feed.reachedEnd && feed.records.isEmpty {
+                    Text("No history yet. Start a task on the left and it shows up here.")
+                        .font(.callout).foregroundStyle(.tertiary).padding(16)
+                }
                 ForEach(feed.days()) { day in
                     Section {
                         ForEach(TaskGroup.group(day.records)) { g in
@@ -195,9 +205,11 @@ struct MenuView: View {
         }
     }
 
+    /// Return in an empty field does nothing rather than log a blank "Untitled" record.
     private func startDraft() {
-        let ds = draft
+        let ds = draft.trimmingCharacters(in: .whitespaces)
         let tags = Record.parseTags(draftTags)
+        guard !ds.isEmpty || !tags.isEmpty else { return }
         draft = ""
         draftTags = ""
         Task { await store.start(ds, tags: tags) }
@@ -359,6 +371,9 @@ struct EditRecordView: View {
             DatePicker("Start", selection: $start)
             Toggle("Running", isOn: $running)
             if !running { DatePicker("End", selection: $end) }
+            if invalid {
+                Text("End must be after start.").font(.caption).foregroundStyle(.red)
+            }
         }
         .padding()
         .frame(width: 360)
@@ -379,9 +394,13 @@ struct EditRecordView: View {
                     Task { await store.update(r) }
                     dismiss()
                 }
+                .disabled(invalid)
             }
         }
     }
+
+    /// A finished record whose end isn't after its start can't be saved (it used to be silently clamped).
+    private var invalid: Bool { !running && end <= start }
 }
 
 enum SettingsSection: String, CaseIterable, Identifiable {
