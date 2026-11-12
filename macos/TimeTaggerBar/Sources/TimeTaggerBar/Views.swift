@@ -692,7 +692,7 @@ struct TaskGroupRow: View {
                            detail: group.records.count > 1 ? "\(group.records.count) sessions" : store.range(group.first),
                            duration: group.total(now: store.now), running: group.isRunning,
                            editing: $editing, editsInline: group.records.count == 1) {
-                    if group.records.count > 1 { withAnimation(.easeOut(duration: 0.15)) { open.toggle() } } else { editing = group.first }
+                    if group.records.count > 1 { withAnimation(.easeOut(duration: 0.15)) { open.toggle() } } else { editing = editing?.id == group.first.id ? nil : group.first }
                 }
             }
             if open {
@@ -701,7 +701,7 @@ struct TaskGroupRow: View {
                         Color.clear.frame(width: 12, height: 1)
                         SessionRow(record: r, title: store.range(r), detail: nil,
                                    duration: r.duration(now: store.now), running: r.isRunning,
-                                   editing: $editing, secondary: true) { editing = r }
+                                   editing: $editing, secondary: true) { editing = editing?.id == r.id ? nil : r }
                     }
                 }
             }
@@ -902,7 +902,7 @@ struct DayTimeline: View {
                                 .frame(width: max(2, (b - a) / span * g.size.width))
                                 .offset(x: a / span * g.size.width)
                                 .help("\(r.title) \(store.range(r))")
-                                .onTapGesture { editing = r }
+                                .onTapGesture { editing = editing?.id == r.id ? nil : r }
                         }
                     }
                 }
