@@ -47,6 +47,10 @@ struct MenuView: View {
             }
             .padding(16)
             .frame(width: 320)
+            // Drag the left column away (like a Calendar popover) to keep it as a window.
+            .gesture(DragGesture(minimumDistance: 40).onEnded { v in
+                StatusBarController.shared?.popOut(offset: v.translation)
+            })
 
             Divider()
 
@@ -102,6 +106,7 @@ struct MenuView: View {
                 Button("Settings…") {
                     openSettings()
                 }
+                Button("Open as Window") { StatusBarController.shared?.popOut() }
                 Button("Refresh") { Task { await store.refresh() } }
                 Divider()
                 Button("Quit TimeTaggerBar") { NSApp.terminate(nil) }
