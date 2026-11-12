@@ -340,7 +340,8 @@ final class Store: ObservableObject {
 
     /// The last few distinct tasks (description + tags), newest first, for one-click resume.
     var recentTasks: [Record] {
-        var seen = Set<String>(), out: [Record] = []
+        // The running task is already on screen; it isn't "recent".
+        var seen = Set(running.map { $0.ds.lowercased() + "|" + $0.tags.sorted().joined(separator: ",") }), out: [Record] = []
         for r in (lately + records).sorted(by: { $0.t1 > $1.t1 }) where !r.isRunning && !r.isDeleted {
             let k = r.ds.lowercased() + "|" + r.tags.sorted().joined(separator: ",")
             if seen.insert(k).inserted { out.append(r) }
