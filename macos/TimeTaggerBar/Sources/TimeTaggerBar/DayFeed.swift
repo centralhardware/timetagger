@@ -16,15 +16,17 @@ final class DayFeed: ObservableObject {
 
     @Published private(set) var records: [Record] = []
     @Published private(set) var reachedEnd = false
+    /// Which calendar a "day" is in; set to the work time zone so days match "Worked today".
+    var calendar = Calendar.current
     /// Start of the oldest day loaded so far.
     private var oldest = Calendar.current.date(byAdding: .day, value: -(chunkDays - 1), to: Calendar.current.startOfDay(for: Date()))!
     private var emptyChunks = 0
     private var loading = false
 
-    func days() -> [Day] { Self.group(records) }
+    func days() -> [Day] { Self.group(records, calendar: calendar) }
 
-    nonisolated static func group(_ records: [Record]) -> [Day] {
-        let groups = Dictionary(grouping: records) { Calendar.current.startOfDay(for: Date(timeIntervalSince1970: TimeInterval($0.t1))) }
+    nonisolated static func group(_ records: [Record], calendar: Calendar = .current) -> [Day] {
+        let groups = Dictionary(grouping: records) { calendar.startOfDay(for: Date(timeIntervalSince1970: TimeInterval($0.t1))) }
         return groups.keys.sorted(by: >).map { Day(id: $0, records: groups[$0]!.sorted { $0.t1 > $1.t1 }) }
     }
 

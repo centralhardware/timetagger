@@ -20,7 +20,13 @@ struct MenuView: View {
                 } else if let r = store.running.first {
                     runningCard(r)
                     if switching {
-                        taskField("Switch to…", icon: "arrow.right")
+                        HStack(alignment: .top, spacing: 6) {
+                            taskField("Switch to…", icon: "arrow.right")
+                            Button { switching = false; draft = "" } label: { Image(systemName: "xmark.circle.fill") }
+                                .buttonStyle(.borderless).foregroundStyle(.tertiary).frame(height: 28)
+                                .keyboardShortcut(.cancelAction)
+                                .help("Close (Esc)")
+                        }
                     } else {
                         Button { switching = true; fieldFocused = true } label: {
                             Label("Switch to…", systemImage: "arrow.right")
@@ -50,9 +56,14 @@ struct MenuView: View {
         }
         .frame(height: 480)
         // Opening the popover puts the cursor in the task field: type and press Return.
-        .onAppear { fieldFocused = true }
+        .onAppear { if store.running.isEmpty { fieldFocused = true } }
         // Reload whenever the store has refreshed (a write here or anywhere else).
-        .task(id: store.lately.hashValue) { await load { try await feed.reload(store.api) } }
+        .task(id: store.lately.hashValue) {
+            feed.calendar = store.workCalendar
+            await load { try await feed.reload(store.api) }
+        }
+        // A popover reopened later starts clean: no half-typed switch left open.
+        .onDisappear { switching = false; draft = ""; editing = nil }
     }
 
     @ViewBuilder private var banners: some View {
@@ -115,7 +126,7 @@ struct MenuView: View {
                         .font(.callout).foregroundStyle(.tertiary).padding(16)
                 }
                 ForEach(feed.days()) { day in
-                    let detailed = Calendar.current.isDateInToday(day.id) || expandedDays.contains(day.id)
+                    let detailed = store.workCalendar.isDateInToday(day.id) || expandedDays.contains(day.id)
                     Section {
                         if detailed {
                             let groups = TaskGroup.group(day.records)
@@ -125,7 +136,7 @@ struct MenuView: View {
                             }
                         } else {
                             // Past days: time per tag; the full log opens from the header.
-                            ForEach(Self.tagTotals(day.records), id: \.0) { tag, secs in
+                            ForEach(Self.tagTotals(day.records).map { ("\(day.id.timeIntervalSince1970)|\($0.0)", $0.0, $0.1) }, id: \.0) { _, tag, secs in
                                 HStack {
                                     Text(tag == "untagged" ? "Untagged" : tag == tag.uppercased() ? tag : "#" + tag).lineLimit(1)
                                     Spacer()
@@ -140,12 +151,12 @@ struct MenuView: View {
                         }
                     } header: {
                         HStack(spacing: 6) {
-                            if !Calendar.current.isDateInToday(day.id) {
+                            if !store.workCalendar.isDateInToday(day.id) {
                                 Image(systemName: "chevron.right")
                                     .font(.caption2.weight(.semibold))
                                     .rotationEffect(.degrees(detailed ? 90 : 0))
                             }
-                            Text(Calendar.current.isDateInToday(day.id) ? "Today" : day.id.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated)))
+                            Text(store.workCalendar.isDateInToday(day.id) ? "Today" : day.id.formatted(Date.FormatStyle(timeZone: store.workTimeZone).weekday(.abbreviated).day().month(.abbreviated)))
                             Spacer()
                             Text(Store.format(day.records.reduce(0) { $0 + $1.duration(now: store.now) }, seconds: false))
                                 .monospacedDigit()
@@ -157,7 +168,7 @@ struct MenuView: View {
                         .background(.bar)
                         .contentShape(Rectangle())
                         .onTapGesture {
-                            guard !Calendar.current.isDateInToday(day.id) else { return }
+                            guard !store.workCalendar.isDateInToday(day.id) else { return }
                             withAnimation(.easeOut(duration: 0.15)) {
                                 if expandedDays.contains(day.id) { expandedDays.remove(day.id) } else { expandedDays.insert(day.id) }
                             }
@@ -968,7 +979,7 @@ struct DayTimeline: View {
     @Binding var editing: Record?
 
     var body: some View {
-        let start = Int(Calendar.current.startOfDay(for: Date()).timeIntervalSince1970)
+        let start = Int(store.workCalendar.startOfDay(for: Date()).timeIntervalSince1970)
         let recs = store.lately.filter { !$0.isDeleted && ($0.isRunning ? store.now : $0.t2) > start }
         if let first = recs.map({ max($0.t1, start) }).min() {
             let span = CGFloat(max(store.now - first, 60))
@@ -981,7 +992,8 @@ struct DayTimeline: View {
                             RoundedRectangle(cornerRadius: 2)
                                 .fill(r.taskColor)
                                 .overlay(r.isRunning ? RoundedRectangle(cornerRadius: 2).stroke(Color.red, lineWidth: 1) : nil)
-                                .frame(width: max(2, (b - a) / span * g.size.width))
+                                // A 1 pt gap keeps back-to-back segments apart.
+                                .frame(width: max(2, (b - a) / span * g.size.width - 1))
                                 .offset(x: a / span * g.size.width)
                                 .help("\(r.title) \(store.range(r))")
                                 .onTapGesture { editing = editing?.id == r.id ? nil : r }

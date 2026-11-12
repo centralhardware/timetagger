@@ -156,6 +156,8 @@ final class Store: ObservableObject {
     }
 
     var workTimeZone: TimeZone { TimeZone(identifier: workTimeZoneID) ?? .current }
+    /// Days in the history and the timeline follow the work time zone, like "Worked today".
+    var workCalendar: Calendar { var c = Calendar.current; c.timeZone = workTimeZone; return c }
 
     /// Clock time of a timestamp in the local or the work time zone.
     func clock(_ t: Int, work: Bool = false) -> String {
