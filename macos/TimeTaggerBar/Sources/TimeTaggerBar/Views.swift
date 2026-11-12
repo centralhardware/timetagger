@@ -13,7 +13,9 @@ struct MenuView: View {
         HStack(alignment: .top, spacing: 0) {
             VStack(alignment: .leading, spacing: 12) {
                 banners
-                if let r = store.running.first {
+                if let r = store.running.first, editing?.id == r.id {
+                    InlineEditor(record: r) { editing = nil }
+                } else if let r = store.running.first {
                     runningCard(r)
                     taskField("Switch to…", icon: "arrow.right")
                 } else {
@@ -34,16 +36,19 @@ struct MenuView: View {
                 .frame(width: 340)
         }
         .frame(height: 480)
-        .sheet(item: $editing) { r in
-            EditRecordView(record: r).environmentObject(store)
-        }
         // Reload whenever the store has refreshed (a write here or anywhere else).
         .task(id: store.lately.hashValue) { await load { try await feed.reload(store.api) } }
     }
 
     @ViewBuilder private var banners: some View {
         if let err = store.error {
-            Label(err, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.secondary).lineLimit(3)
+            HStack(alignment: .top) {
+                Label(err, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.secondary).lineLimit(3)
+                Spacer(minLength: 4)
+                Button { store.error = nil } label: { Image(systemName: "xmark").font(.caption2) }
+                    .buttonStyle(.borderless).foregroundStyle(.tertiary)
+                    .help("Dismiss").accessibilityLabel("Dismiss error")
+            }
         }
         if let u = store.undoable {
             HStack {
@@ -91,6 +96,10 @@ struct MenuView: View {
     private var daySection: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0, pinnedViews: .sectionHeaders) {
+                if feed.reachedEnd && feed.records.isEmpty {
+                    Text("No history yet. Start a task on the left and it shows up here.")
+                        .font(.callout).foregroundStyle(.tertiary).padding(16)
+                }
                 ForEach(feed.days()) { day in
                     Section {
                         ForEach(TaskGroup.group(day.records)) { g in
@@ -195,9 +204,11 @@ struct MenuView: View {
         }
     }
 
+    /// Return in an empty field does nothing rather than log a blank "Untitled" record.
     private func startDraft() {
-        let ds = draft
+        let ds = draft.trimmingCharacters(in: .whitespaces)
         let tags = Record.parseTags(draftTags)
+        guard !ds.isEmpty || !tags.isEmpty else { return }
         draft = ""
         draftTags = ""
         Task { await store.start(ds, tags: tags) }
@@ -342,44 +353,111 @@ struct TagSuggestions: View {
     }
 }
 
-struct EditRecordView: View {
+/// Edits a record in place, in the popover's own style: no sheet, Return saves, Esc cancels.
+struct InlineEditor: View {
     @EnvironmentObject var store: Store
-    @Environment(\.dismiss) private var dismiss
-    @State var record: Record
-    @State private var start = Date()
-    @State private var end = Date()
-    @State private var running = false
-    @State private var tagText = ""
+    let original: Record
+    let close: () -> Void
+    @State private var ds: String
+    @State private var tagText: String
+    @State private var start: Date
+    @State private var end: Date
+    @State private var running: Bool
+    @State private var lastStart: Date
+
+    init(record: Record, close: @escaping () -> Void) {
+        original = record
+        self.close = close
+        let s = Date(timeIntervalSince1970: TimeInterval(record.t1))
+        _ds = State(initialValue: record.ds)
+        _tagText = State(initialValue: record.tags.joined(separator: " "))
+        _start = State(initialValue: s)
+        _end = State(initialValue: record.isRunning ? Date() : Date(timeIntervalSince1970: TimeInterval(record.t2)))
+        _running = State(initialValue: record.isRunning)
+        _lastStart = State(initialValue: s)
+    }
 
     var body: some View {
-        Form {
-            TextField("Description", text: $record.ds)
-            TextField("Tags", text: $tagText, prompt: Text("core-12 call"))
-            TagSuggestions(text: $tagText, tags: store.tags)
-            DatePicker("Start", selection: $start)
-            Toggle("Running", isOn: $running)
-            if !running { DatePicker("End", selection: $end) }
-        }
-        .padding()
-        .frame(width: 360)
-        .onAppear {
-            start = Date(timeIntervalSince1970: TimeInterval(record.t1))
-            end = Date(timeIntervalSince1970: TimeInterval(record.t2))
-            running = record.isRunning
-            tagText = record.tags.joined(separator: " ")
-        }
-        .toolbar {
-            ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-            ToolbarItem(placement: .confirmationAction) {
-                Button("Save") {
-                    record.t1 = Int(start.timeIntervalSince1970)
-                    record.t2 = running ? record.t1 : max(Int(end.timeIntervalSince1970), record.t1 + 1)
-                    record.tags = Record.parseTags(tagText)
-                    let r = record
-                    Task { await store.update(r) }
-                    dismiss()
-                }
+        VStack(alignment: .leading, spacing: 8) {
+            field { TextField("Description", text: $ds).textFieldStyle(.plain).onSubmit(save) }
+            field {
+                Image(systemName: "number").foregroundStyle(.secondary)
+                TextField("tags", text: $tagText).textFieldStyle(.plain).onSubmit(save)
             }
+            TagSuggestions(text: $tagText, tags: store.tags)
+            HStack(spacing: 6) {
+                DatePicker("Day", selection: $start, displayedComponents: .date)
+                    .labelsHidden().datePickerStyle(.field)
+                Spacer()
+                Toggle("Running", isOn: $running).toggleStyle(.checkbox)
+            }
+            TimeRow(label: "Start", time: $start)
+            if !running {
+                TimeRow(label: "End", time: $end)
+            }
+            HStack {
+                if invalid {
+                    Text("End must be after start").foregroundStyle(.red)
+                } else if !running {
+                    Text(Store.format(Int(end.timeIntervalSince(start)), seconds: false)).monospacedDigit().foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Cancel", action: close).keyboardShortcut(.cancelAction)
+                Button("Save", action: save).keyboardShortcut(.defaultAction).disabled(invalid)
+            }
+            .font(.caption)
+            .controlSize(.small)
+        }
+        .font(.callout)
+        .padding(10)
+        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        // Moving the day carries the end along, so the duration is kept.
+        .onChange(of: start) { new in
+            if !Calendar.current.isDate(new, inSameDayAs: lastStart) { end = end.addingTimeInterval(new.timeIntervalSince(lastStart)) }
+            lastStart = new
+        }
+    }
+
+    private func field<C: View>(@ViewBuilder _ content: () -> C) -> some View {
+        HStack(spacing: 8, content: content)
+            .padding(.horizontal, 8)
+            .frame(height: 26)
+            .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+    }
+
+    /// A finished record whose end isn't after its start can't be saved.
+    private var invalid: Bool { !running && end <= start }
+
+    private func save() {
+        guard !invalid else { return }
+        var r = original
+        r.ds = ds
+        r.tags = Record.parseTags(tagText)
+        r.t1 = Int(start.timeIntervalSince1970)
+        r.t2 = running ? r.t1 : Int(end.timeIntervalSince1970)
+        close()
+        Task { await store.update(r) }
+    }
+}
+
+/// An hh:mm field with quick nudges: −5 / +5 minutes and Now.
+struct TimeRow: View {
+    let label: String
+    @Binding var time: Date
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(label).foregroundStyle(.secondary).frame(width: 36, alignment: .leading)
+            HStack(spacing: 6) {
+                DatePicker(label, selection: $time, displayedComponents: .hourAndMinute)
+                    .labelsHidden()
+                    .datePickerStyle(.field)
+                Button("−5") { time = time.addingTimeInterval(-300) }.help("5 minutes earlier")
+                Button("+5") { time = time.addingTimeInterval(300) }.help("5 minutes later")
+                Button("Now") { time = Date() }
+            }
+            .controlSize(.small)
+            .monospacedDigit()
         }
     }
 }
@@ -603,7 +681,7 @@ struct TaskGroupRow: View {
                 SessionRow(record: group.first, title: group.first.title,
                            detail: group.records.count > 1 ? "\(group.records.count) sessions" : store.range(group.first),
                            duration: group.total(now: store.now), running: group.isRunning,
-                           editing: $editing) {
+                           editing: $editing, editsInline: group.records.count == 1) {
                     if group.records.count > 1 { withAnimation(.easeOut(duration: 0.15)) { open.toggle() } } else { editing = group.first }
                 }
             }
@@ -619,6 +697,10 @@ struct TaskGroupRow: View {
             }
         }
         .padding(.horizontal, 8)
+        // Editing a folded session opens the group so its editor is visible.
+        .onChange(of: editing?.id) { id in
+            if let id, group.records.count > 1, group.records.contains(where: { $0.id == id }) { open = true }
+        }
     }
 }
 
@@ -632,10 +714,23 @@ struct SessionRow: View {
     let running: Bool
     @Binding var editing: Record?
     var secondary = false
+    /// False for a folded group's header, whose sessions each show their own editor.
+    var editsInline = true
     let tap: () -> Void
     @State private var hover = false
 
     var body: some View {
+        VStack(spacing: 4) {
+            row
+            // A running record is edited in the left column, where its clock is.
+            if editsInline, let e = editing, e.id == record.id, !record.isRunning {
+                InlineEditor(record: record) { editing = nil }
+                    .padding(.bottom, 8)
+            }
+        }
+    }
+
+    private var row: some View {
         HStack(spacing: 8) {
             if running { Circle().fill(.red).frame(width: 6, height: 6).accessibilityLabel("Running") }
             Text(title)
@@ -670,7 +765,7 @@ struct SessionRow: View {
         .onHover { hover = $0 }
         .onTapGesture(perform: tap)
         .contextMenu {
-            Button("Edit…") { editing = record }
+            Button("Edit") { editing = record }
             Button("Resume") { Task { await store.start(record.ds, tags: record.tags) } }
             if record.isRunning { Button("Stop") { Task { await store.stop(record) } } }
             TicketLinks(record: record)
