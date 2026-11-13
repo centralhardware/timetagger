@@ -2,6 +2,7 @@
 
 A small native macOS menu bar client for TimeTagger (macOS 13+).
 
+- ⌥⌘T anywhere opens/closes the popover (global hotkey, no Accessibility permission needed)
 - running timer in the menu bar; the popover focuses on the current task: big timer, Stop, "Switch to…", three recent tasks to resume, today's total
 - start times in local time and in a work time zone chosen in Settings
 - History window: records by day with day totals, date range, search, add/edit/delete/resume

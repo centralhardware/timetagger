@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import Combine
 import SwiftUI
 
@@ -27,6 +28,8 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
     private var item: NSStatusItem!
     private let popover = NSPopover()
     private var watch: AnyCancellable?
+    /// ⌥⌘T from anywhere opens or closes the popover (or brings the torn-off window forward).
+    private var hotKey: HotKey?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Self.shared = self
@@ -40,6 +43,8 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
         popover.animates = false
         popover.delegate = self
         popover.contentViewController = NSHostingController(rootView: MenuView().environmentObject(store))
+
+        hotKey = HotKey(keyCode: kVK_ANSI_T, modifiers: cmdKey | optionKey) { [weak self] in self?.toggle() }
 
         updateItem()
         // The store publishes every second while a timer runs; the bar follows it.
