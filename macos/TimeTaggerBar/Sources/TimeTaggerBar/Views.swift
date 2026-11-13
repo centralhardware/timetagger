@@ -564,12 +564,16 @@ struct TimeRow: View {
     }
 }
 
-/// A time as a button, like Calendar's event times: click it for a calendar and a clock face.
+/// A time as a button; click it to type the time ("14:30", "1430", "9.5", "2:15pm") or nudge it.
+/// No calendar or clock face: almost every edit is a few minutes either way, or yesterday at most.
 struct TimePicker: View {
     @Binding var time: Date
     var latest: Date? = nil
     var showsDate = false
     @State private var open = false
+    @State private var text = ""
+    @State private var invalid = false
+    @FocusState private var focused: Bool
 
     var body: some View {
         Button { open.toggle() } label: {
@@ -585,23 +589,90 @@ struct TimePicker: View {
         .buttonStyle(.bordered)
         .controlSize(.small)
         .popover(isPresented: $open, arrowEdge: .bottom) {
-            HStack(alignment: .top, spacing: 12) {
-                DatePicker("", selection: clamped, displayedComponents: .date)
-                    .datePickerStyle(.graphical).labelsHidden()
-                VStack(spacing: 8) {
-                    DatePicker("", selection: clamped, displayedComponents: .hourAndMinute)
-                        .datePickerStyle(.graphical).labelsHidden()
-                    DatePicker("", selection: clamped, displayedComponents: .hourAndMinute)
-                        .datePickerStyle(.stepperField).labelsHidden().fixedSize()
+            VStack(alignment: .leading, spacing: 8) {
+                if showsDate {
+                    HStack(spacing: 4) {
+                        Button { shiftDays(-1) } label: { Image(systemName: "chevron.left") }
+                            .help("Previous day")
+                        Text(time, format: .dateTime.weekday(.abbreviated).day().month(.abbreviated))
+                            .monospacedDigit().frame(minWidth: 90)
+                        Button { shiftDays(1) } label: { Image(systemName: "chevron.right") }
+                            .help("Next day")
+                    }
+                    .buttonStyle(.borderless)
                 }
+                TextField("hh:mm", text: $text)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.title3.monospacedDigit())
+                    .frame(width: 120)
+                    .focused($focused)
+                    .onSubmit { if commit() { open = false } }
+                    .onChange(of: text) { _ in invalid = false }
+                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(.red, lineWidth: invalid ? 1 : 0))
+                HStack(spacing: 4) {
+                    ForEach([-15, -5, 5, 15], id: \.self) { m in
+                        Button(m < 0 ? "\u{2212}\(-m)" : "+\(m)") { set(time.addingTimeInterval(Double(m * 60))) }
+                    }
+                    Button("Now") { set(Date()) }
+                }
+                .controlSize(.small)
+                .monospacedDigit()
             }
             .padding(12)
+            .onAppear { sync(); focused = true }
+            .onDisappear { _ = commit() }
         }
     }
 
+    private func sync() {
+        let c = Calendar.current.dateComponents([.hour, .minute], from: time)
+        text = String(format: "%02d:%02d", c.hour ?? 0, c.minute ?? 0)
+        invalid = false
+    }
+
     /// Keeps the time at or before `latest` (a running record can't start in the future).
-    private var clamped: Binding<Date> {
-        Binding(get: { time }, set: { new in time = latest.map { min(new, $0) } ?? new })
+    private func set(_ new: Date) {
+        time = latest.map { min(new, $0) } ?? new
+        sync()
+    }
+
+    private func shiftDays(_ n: Int) {
+        if let d = Calendar.current.date(byAdding: .day, value: n, to: time) { set(d) }
+    }
+
+    /// Applies the typed time to the current day. False (and a red outline) when it can't be read.
+    @discardableResult
+    private func commit() -> Bool {
+        guard let hm = Self.parse(text) else { invalid = true; return false }
+        let cal = Calendar.current
+        if let d = cal.date(bySettingHour: hm.0, minute: hm.1, second: 0, of: time), d != time { set(d) } else { sync() }
+        return true
+    }
+
+    /// "14:30", "14.30", "1430", "930", "9", "9.5" (= 9:30), "2:15pm", "2pm" → (hour, minute).
+    static func parse(_ raw: String) -> (Int, Int)? {
+        var s = raw.lowercased().replacingOccurrences(of: " ", with: "")
+        var pm: Bool?
+        if s.hasSuffix("pm") { pm = true; s.removeLast(2) } else if s.hasSuffix("am") { pm = false; s.removeLast(2) }
+        var h: Int, m: Int
+        if let sep = s.firstIndex(where: { $0 == ":" || $0 == "." || $0 == "," }) {
+            let hs = String(s[..<sep]), ms = String(s[s.index(after: sep)...])
+            guard let hh = Int(hs) else { return nil }
+            h = hh
+            if ms.isEmpty { m = 0 }
+            else if ms.count == 1, let d = Int(ms) { m = d * 6 }   // decimal hours: 9.5 → 9:30
+            else if ms.count == 2, let mm = Int(ms) { m = mm }
+            else { return nil }
+        } else {
+            guard !s.isEmpty, s.allSatisfy(\.isNumber), let n = Int(s) else { return nil }
+            if s.count <= 2 { h = n; m = 0 } else if s.count <= 4 { h = n / 100; m = n % 100 } else { return nil }
+        }
+        if let pm {
+            guard (1...12).contains(h) else { return nil }
+            h = h % 12 + (pm ? 12 : 0)
+        }
+        guard (0...23).contains(h), (0...59).contains(m) else { return nil }
+        return (h, m)
     }
 }
 
