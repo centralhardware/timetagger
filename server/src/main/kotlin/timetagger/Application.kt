@@ -45,6 +45,7 @@ import timetagger.model.VersionResponse
 import timetagger.routes.recordRoutes
 import timetagger.routes.settingRoutes
 import timetagger.routes.syncRoutes
+import timetagger.routes.watchRoutes
 import timetagger.service.RecordService
 import timetagger.service.SettingService
 import timetagger.service.SyncService
@@ -122,15 +123,16 @@ fun Application.module(config: Config, db: Database) {
 
     routing {
         // At the root, so the bare domain is the base URL, and under the prefix for clients set up with it.
-        for (prefix in setOf("/", config.pathPrefix)) route(prefix) { api(services) }
+        for (prefix in setOf("/", config.pathPrefix)) route(prefix) { api(services, config) }
     }
 }
 
-private fun Route.api(services: Services) {
+private fun Route.api(services: Services, config: Config) {
     get("status") { call.respondText("ok") }
     route("api/v1") {
         get("version") { call.respond(VersionResponse(version())) }
         authRoutes(services.auth)
+        watchRoutes(services.auth, services.records, java.time.ZoneId.of(config.watchTz), config.watchTargetMinutes)
         authenticate(BEARER) {
             accountRoutes(services.auth)
             recordRoutes(services.records)

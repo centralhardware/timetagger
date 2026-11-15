@@ -20,6 +20,10 @@ data class Config(
     val mergeGapSeconds: Long = 60,
     /** A tag set aside when comparing records, kept on the merged record (empty for none). */
     val mergeIgnoreTag: String = "finished",
+    /** The day boundary for GET /watch/today when the request names no tz. */
+    val watchTz: String = "Europe/Podgorica",
+    /** The day's target for GET /watch/today, in minutes. */
+    val watchTargetMinutes: Long = 460,
 ) {
     val host: String get() = bind.substringBeforeLast(":")
     val port: Int get() = bind.substringAfterLast(":").toInt()
@@ -46,6 +50,8 @@ data class Config(
                 autoMerge = value("auto_merge")?.toBooleanStrictOrNull() ?: d.autoMerge,
                 mergeGapSeconds = value("merge_gap_seconds")?.toLongOrNull() ?: d.mergeGapSeconds,
                 mergeIgnoreTag = value("merge_ignore_tag")?.trimStart('#') ?: d.mergeIgnoreTag,
+                watchTz = value("watch_tz") ?: d.watchTz,
+                watchTargetMinutes = value("watch_target_minutes")?.toLongOrNull() ?: d.watchTargetMinutes,
             )
         }
 

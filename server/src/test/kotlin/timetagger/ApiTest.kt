@@ -155,6 +155,29 @@ class ApiTest {
     }
 
     @Test
+    fun watchToday() = api {
+        val access = token()
+        val key = client.post("$API/api-keys") {
+            header("Authorization", "Bearer $access"); contentType(ContentType.Application.Json); setBody("""{"name":"watch"}""")
+        }.obj()["key"]!!.jsonPrimitive.content
+        val start = Instant.now().minusSeconds(90 * 60)
+        client.post("$API/records") {
+            header("Authorization", "Bearer $access"); contentType(ContentType.Application.Json)
+            setBody("""{"start":"$start","stop":"${start.plusSeconds(3600)}","description":"work"}""")
+        }
+        // Only an API key, and only in the query.
+        assertEquals(HttpStatusCode.Unauthorized, client.get("$API/watch/today").status)
+        assertEquals(HttpStatusCode.Unauthorized, client.get("$API/watch/today?key=$access").status)
+        assertEquals(HttpStatusCode.Unauthorized, client.get("$API/watch/today?key=tt_nope").status)
+        val body = client.get("$API/watch/today?key=$key&tz=UTC&target=120").obj()
+        // The record may straddle UTC midnight in a test run right after it; then today holds nothing.
+        val tracked = body["trackedSeconds"]!!.jsonPrimitive.long
+        assertTrue(tracked == 3600L || tracked == 0L)
+        assertEquals(7200, body["targetSeconds"]!!.jsonPrimitive.long)
+        assertEquals("/ 2:00", body["line2"]!!.jsonPrimitive.content)
+    }
+
+    @Test
     fun newPasswordEndsSessions() = api {
         val refreshToken = login().obj()["refreshToken"]!!.jsonPrimitive.content
         PasswordService(db, UserRepository()).set("alice", "changed")
