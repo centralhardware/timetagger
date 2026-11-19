@@ -370,7 +370,7 @@ final class Store: ObservableObject {
     var recentTasks: [Record] {
         // The running task is already on screen; it isn't "recent".
         var seen = Set(running.map(\.taskKey)), out: [Record] = []
-        for r in (lately + records).sorted(by: { $0.t1 > $1.t1 }) where !r.isRunning && !r.isDeleted {
+        for r in (lately + records).sorted(by: { $0.t1 > $1.t1 }) where !r.isRunning && !r.isDeleted && !r.tags.contains(Store.breakTag) {
             let k = r.taskKey
             if seen.insert(k).inserted { out.append(r) }
             if out.count == 3 { break }
@@ -384,6 +384,17 @@ final class Store: ObservableObject {
         r.t2 = max(t, r.t1 + 1)
         await save([r], label: "Adjusted \u{201C}\(record.title)\u{201D}", before: [record])
     }
+
+    /// Fills an untracked gap with a break record ("Dinner #break"); the #timereport never shows #break.
+    func markBreak(_ name: String, from t1: Int, to t2: Int) async {
+        guard t2 > t1 else { return }
+        let new = Record(key: Record.newKey(), rev: 0, t1: t1, t2: t2, ds: name, tags: [Store.breakTag], deleted: 0)
+        await save([new], label: "Marked \u{201C}\(name)\u{201D}")
+    }
+
+    static let breakTag = "break"
+    /// What a gap can be marked as, most common first.
+    static let breakKinds = ["Lunch", "Dinner", "Breakfast", "Coffee", "Walk", "Errand", "Break"]
 
     /// Joins back-to-back sessions into the earliest one, which then runs to the latest end.
     func merge(_ recs: [Record]) async {

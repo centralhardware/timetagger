@@ -1083,6 +1083,15 @@ struct GapRow: View {
                 Rectangle().fill(delta > 0 ? Color.secondary.opacity(0.3) : Color.orange.opacity(0.6)).frame(width: 2, height: 14)
                 Text(delta > 0 ? "\(Store.format(delta, seconds: false)) untracked" : "\(Store.format(-delta, seconds: false)) overlap")
                 Spacer()
+                if delta > 0 {
+                    Menu("Mark as") {
+                        ForEach(Store.breakKinds, id: \.self) { kind in
+                            Button(kind) { Task { await store.markBreak(kind, from: earlier.t2, to: laterStart) } }
+                        }
+                    }
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                    .help("Log \(store.clock(earlier.t2))\u{2013}\(store.clock(laterStart)) as a break; it stays out of the work report")
+                }
                 Button(delta > 0 ? "Fill" : "Trim") { Task { await store.setEnd(earlier, to: laterStart) } }
                     .buttonStyle(.borderless)
                     .help(delta > 0 ? "Extend \u{201C}\(earlier.title)\u{201D} to \(store.clock(laterStart))" : "End \u{201C}\(earlier.title)\u{201D} at \(store.clock(laterStart))")
