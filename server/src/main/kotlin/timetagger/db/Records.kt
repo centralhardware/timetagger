@@ -4,6 +4,7 @@ import kotliquery.Row
 import kotliquery.Session
 import kotliquery.queryOf
 import timetagger.model.Record
+import timetagger.model.RecordKind
 import java.time.Instant
 
 /** Filters for GET /records. */
@@ -34,7 +35,7 @@ class RecordRepository {
         tags = row.array<String>("tags").toList(),
         deletedAt = row.instantOrNull("deleted_at"),
         revision = row.long("revision"),
-        kind = row.string("kind"),
+        kind = RecordKind.of(row.string("kind")),
     )
 
     /** Records overlapping [from, to]; a running record counts as lasting until now. */
@@ -76,7 +77,7 @@ class RecordRepository {
     /** Creates the record (the database picks the id) with a new revision and its tags. */
     fun create(
         session: Session, userId: Long, start: Instant, stop: Instant?,
-        description: String, ticket: String?, tags: List<String>, deletedAt: Instant?, kind: String = "work",
+        description: String, ticket: String?, tags: List<String>, deletedAt: Instant?, kind: RecordKind = RecordKind.WORK,
     ): Record {
         val id = session.single(
             queryOf(
@@ -87,7 +88,7 @@ class RecordRepository {
                 """,
                 mapOf(
                     "user" to userId, "start" to start, "stop" to stop,
-                    "description" to description, "ticket" to ticket, "deleted" to deletedAt, "kind" to kind,
+                    "description" to description, "ticket" to ticket, "deleted" to deletedAt, "kind" to kind.db,
                 ),
             ),
         ) { it.long("id") }!!
@@ -97,7 +98,7 @@ class RecordRepository {
     /** Replaces the record's fields, stamps a new revision and rewrites its tags; a null [kind] keeps it. */
     fun update(
         session: Session, userId: Long, id: Long, start: Instant, stop: Instant?,
-        description: String, ticket: String?, tags: List<String>, deletedAt: Instant?, kind: String? = null,
+        description: String, ticket: String?, tags: List<String>, deletedAt: Instant?, kind: RecordKind? = null,
     ): Record {
         session.update(
             queryOf(
@@ -108,7 +109,7 @@ class RecordRepository {
                 """,
                 mapOf(
                     "user" to userId, "id" to id, "start" to start, "stop" to stop,
-                    "description" to description, "ticket" to ticket, "deleted" to deletedAt, "kind" to kind,
+                    "description" to description, "ticket" to ticket, "deleted" to deletedAt, "kind" to kind?.db,
                 ),
             ),
         )
