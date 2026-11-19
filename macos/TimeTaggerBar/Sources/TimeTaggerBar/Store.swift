@@ -49,7 +49,9 @@ final class Store: ObservableObject {
     /// What an untracked gap can be marked as, comma-separated, most common first.
     @AppStorage("breakKinds") var breakKindsText = "Lunch, Dinner, Breakfast, Coffee, Walk, Errand, Break"
     /// Settings kept on the server so every device shares them; UserDefaults is only the local copy.
-    static let syncedKeys = ["ticketURL", "ticketPrefixes", "breakKinds"]
+    /// Gap names by gap start, as JSON ({"1763550000": "Dinner"}).
+    @AppStorage("gapLabels") var gapLabelsText = "{}"
+    static let syncedKeys = ["ticketURL", "ticketPrefixes", "breakKinds", "gapLabels"]
     /// What the server last held for each synced key, so pulling a value doesn't echo it back.
     private var syncedValues: [String: String] = [:]
     @AppStorage("remindIdle") var remindIdle = true
@@ -385,7 +387,7 @@ final class Store: ObservableObject {
     var recentTasks: [Record] {
         // The running task is already on screen; it isn't "recent".
         var seen = Set(running.map(\.taskKey)), out: [Record] = []
-        for r in (lately + records).sorted(by: { $0.t1 > $1.t1 }) where !r.isRunning && !r.isDeleted && !r.tags.contains(Store.breakTag) {
+        for r in (lately + records).sorted(by: { $0.t1 > $1.t1 }) where !r.isRunning && !r.isDeleted {
             let k = r.taskKey
             if seen.insert(k).inserted { out.append(r) }
             if out.count == 3 { break }
@@ -400,14 +402,25 @@ final class Store: ObservableObject {
         await save([r], label: "Adjusted \u{201C}\(record.title)\u{201D}", before: [record])
     }
 
-    /// Fills an untracked gap with a break record ("Dinner #break"); the #timereport never shows #break.
-    func markBreak(_ name: String, from t1: Int, to t2: Int) async {
-        guard t2 > t1 else { return }
-        let new = Record(key: Record.newKey(), rev: 0, t1: t1, t2: t2, ds: name, tags: [Store.breakTag], deleted: 0)
-        await save([new], label: "Marked \u{201C}\(name)\u{201D}")
+    /// A gap stays a gap; marking it only names it ("Dinner"). Labels are kept by the gap's
+    /// start (the earlier record's end) in the synced "gapLabels" setting.
+    func gapLabel(at start: Int) -> String? { gapLabels[String(start)] }
+
+    func markGap(at start: Int, as label: String?) async {
+        var m = gapLabels
+        m[String(start)] = label
+        // Only the last 90 days: the server caps a setting at 8 KB.
+        let cutoff = Int(Date().timeIntervalSince1970) - 90 * 86400
+        m = m.filter { (Int($0.key) ?? 0) >= cutoff }
+        guard let data = try? JSONEncoder().encode(m), let text = String(data: data, encoding: .utf8) else { return }
+        gapLabelsText = text
+        await pushSetting("gapLabels", text)
     }
 
-    static let breakTag = "break"
+    private var gapLabels: [String: String] {
+        (try? JSONDecoder().decode([String: String].self, from: Data(gapLabelsText.utf8))) ?? [:]
+    }
+
     var breakKinds: [String] {
         breakKindsText.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     }

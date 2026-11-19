@@ -768,8 +768,8 @@ struct SettingsView: View {
                     Text("A ticket like ABC-123 links to this URL with {key} = ABC-123.").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Breaks") {
-                    TextField("Mark gap as", text: $store.breakKindsText, prompt: Text("Lunch, Dinner, Break"))
-                    Text("Comma-separated. Tickets and breaks are stored on the server and shared by all your devices.").font(.caption).foregroundStyle(.secondary)
+                    TextField("Gap names", text: $store.breakKindsText, prompt: Text("Lunch, Dinner, Break"))
+                    Text("Comma-separated. Tickets, gap names and labelled gaps are stored on the server and shared by all your devices.").font(.caption).foregroundStyle(.secondary)
                 }
                 .onChange(of: store.ticketPrefixes) { v in Task { await store.pushSetting("ticketPrefixes", v) } }
                 .onChange(of: store.ticketURL) { v in Task { await store.pushSetting("ticketURL", v) } }
@@ -1101,16 +1101,22 @@ struct GapRow: View {
         if !earlier.isRunning, delta >= 5 * 60 || delta <= -60, delta < 4 * 3600 {
             HStack(spacing: 6) {
                 Rectangle().fill(delta > 0 ? Color.secondary.opacity(0.3) : Color.orange.opacity(0.6)).frame(width: 2, height: 14)
-                Text(delta > 0 ? "\(Store.format(delta, seconds: false)) untracked" : "\(Store.format(-delta, seconds: false)) overlap")
+                let label = delta > 0 ? store.gapLabel(at: earlier.t2) : nil
+                Text(delta > 0 ? "\(Store.format(delta, seconds: false)) \(label ?? "untracked")" : "\(Store.format(-delta, seconds: false)) overlap")
+                    .foregroundStyle(label == nil ? .secondary : .primary)
                 Spacer()
                 if delta > 0 {
-                    Menu("Mark as") {
+                    Menu(label == nil ? "Mark as" : "Change") {
                         ForEach(store.breakKinds, id: \.self) { kind in
-                            Button(kind) { Task { await store.markBreak(kind, from: earlier.t2, to: laterStart) } }
+                            Button(kind) { Task { await store.markGap(at: earlier.t2, as: kind) } }
+                        }
+                        if label != nil {
+                            Divider()
+                            Button("Clear") { Task { await store.markGap(at: earlier.t2, as: nil) } }
                         }
                     }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-                    .help("Log \(store.clock(earlier.t2))\u{2013}\(store.clock(laterStart)) as a break; it stays out of the work report")
+                    .help("Name the gap \(store.clock(earlier.t2))\u{2013}\(store.clock(laterStart)); it stays untracked")
                 }
                 Button(delta > 0 ? "Fill" : "Trim") { Task { await store.setEnd(earlier, to: laterStart) } }
                     .buttonStyle(.borderless)
