@@ -14,7 +14,7 @@ struct Record: Codable, Identifiable, Hashable {
     var tags: [String] = []
     var deleted: Int?
     var st: Double?
-    /// Upper case ticket key such as "SM-1176", kept apart from the description and tags.
+    /// Upper case ticket key such as "ABC-123", kept apart from the description and tags.
     var ticket: String? = nil
 
     var id: String { key }
@@ -25,7 +25,7 @@ struct Record: Codable, Identifiable, Hashable {
         (isRunning ? now : t2) - t1
     }
 
-    /// Tags typed as text ("#call core-12, x"): split on spaces and commas, '#' optional.
+    /// Tags typed as text ("#call abc-12, x"): split on spaces and commas, '#' optional.
     static func parseTags(_ text: String) -> [String] {
         var out: [String] = []
         for w in text.split(whereSeparator: { $0.isWhitespace || $0 == "," }) {

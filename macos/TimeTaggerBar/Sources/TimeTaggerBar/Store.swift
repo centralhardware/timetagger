@@ -42,8 +42,10 @@ final class Store: ObservableObject {
     @AppStorage("showWorkTime") var showWorkTime = true
     @AppStorage("pauseOnSleep") var pauseOnSleep = true
     @AppStorage("username") var username = ""
-    /// Where a ticket tag like #sm-1061 opens; {key} becomes SM-1061. Empty turns the links off.
+    /// Where a ticket tag like #abc-123 opens; {key} becomes ABC-123. Empty turns the links off.
     @AppStorage("ticketURL") var ticketURL = ""
+    /// Which project keys count as tickets ("ABC, XYZ"); empty accepts any. Read by Record.isTicket.
+    @AppStorage("ticketPrefixes") var ticketPrefixes = ""
     @AppStorage("remindIdle") var remindIdle = true
     @AppStorage("workStartHour") var workStartHour = 9
     @AppStorage("workEndHour") var workEndHour = 18
@@ -336,9 +338,9 @@ final class Store: ObservableObject {
         }
     }
 
-    /// The link for a ticket tag such as "sm-1061", if a ticket URL is set and the tag looks like a key.
+    /// The link for a ticket tag such as "abc-123", if a ticket URL is set and the tag looks like a key.
     func ticketLink(_ tag: String) -> URL? {
-        guard !ticketURL.isEmpty, tag.range(of: #"^[a-z][a-z0-9]*-\d+$"#, options: .regularExpression) != nil else { return nil }
+        guard !ticketURL.isEmpty, Record.isTicket(tag) else { return nil }
         return URL(string: ticketURL.replacingOccurrences(of: "{key}", with: tag.uppercased()))
     }
 

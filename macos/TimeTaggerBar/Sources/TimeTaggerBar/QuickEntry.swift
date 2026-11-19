@@ -1,6 +1,6 @@
 import Foundation
 
-/// One line typed into the task field, e.g. "SM-1176 fix login #call 25m ago":
+/// One line typed into the task field, e.g. "ABC-123 fix login #call 25m ago":
 /// the first ticket key becomes the ticket, #words become tags, "25m ago" / "1h ago" / "at 14:30" backdate the start.
 struct QuickEntry: Equatable {
     var ds = ""
