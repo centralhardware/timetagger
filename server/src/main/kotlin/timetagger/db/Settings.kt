@@ -44,7 +44,8 @@ class SettingRepository {
         session.single(
             queryOf(
                 "SELECT greatest((SELECT max(revision) FROM records WHERE user_id = :user), " +
-                    "(SELECT max(revision) FROM settings WHERE user_id = :user)) AS m",
+                    "(SELECT max(revision) FROM settings WHERE user_id = :user), " +
+                    "(SELECT max(revision) FROM workspaces WHERE user_id = :user)) AS m",
                 mapOf("user" to userId),
             ),
         ) { it.longOrNull("m") } ?: 0

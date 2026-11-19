@@ -38,15 +38,18 @@ import timetagger.config.Config
 import timetagger.db.Database
 import timetagger.db.RecordRepository
 import timetagger.db.SettingRepository
+import timetagger.db.WorkspaceRepository
 import timetagger.db.UserRepository
 import timetagger.model.ApiJson
 import timetagger.model.ErrorResponse
 import timetagger.model.VersionResponse
 import timetagger.routes.recordRoutes
 import timetagger.routes.settingRoutes
+import timetagger.routes.workspaceRoutes
 import timetagger.routes.syncRoutes
 import timetagger.service.RecordService
 import timetagger.service.SettingService
+import timetagger.service.WorkspaceService
 import timetagger.service.SyncService
 import timetagger.service.MergeService
 import java.time.Duration
@@ -60,11 +63,13 @@ class Services(db: Database, config: Config) {
     private val users = UserRepository()
     private val recordRepo = RecordRepository()
     private val settingRepo = SettingRepository()
+    private val workspaceRepo = WorkspaceRepository()
     val passwords = PasswordService(db, users)
     val auth = AuthService(db, users, passwords, AccessTokens(config.jwtKey), RefreshTokenRepository(), ApiKeyRepository())
-    val records = RecordService(db, recordRepo)
+    val records = RecordService(db, recordRepo, workspaceRepo)
+    val workspaces = WorkspaceService(db, workspaceRepo)
     val settings = SettingService(db, settingRepo)
-    val sync = SyncService(db, recordRepo, settingRepo)
+    val sync = SyncService(db, recordRepo, settingRepo, workspaceRepo)
     val merge = MergeService(db, recordRepo, Duration.ofSeconds(config.mergeGapSeconds), config.mergeIgnoreTag.lowercase().ifBlank { null })
 }
 
@@ -135,6 +140,7 @@ private fun Route.api(services: Services) {
             accountRoutes(services.auth)
             recordRoutes(services.records)
             settingRoutes(services.settings)
+            workspaceRoutes(services.workspaces)
             syncRoutes(services.sync)
         }
     }
