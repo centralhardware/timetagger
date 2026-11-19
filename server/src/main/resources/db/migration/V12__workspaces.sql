@@ -19,7 +19,9 @@ CREATE INDEX records_workspace ON records (user_id, workspace_id, start_at);
 INSERT INTO workspaces (user_id, name)
 SELECT DISTINCT user_id, 'Work' FROM records;
 
+-- Revisions stay as they are: a new client reads workspaceId with the records anyway,
+-- and the old ones don't know the field.
 UPDATE records r
-SET workspace_id = w.id, updated_at = now(), revision = nextval('revision_seq')
+SET workspace_id = w.id
 FROM workspaces w
 WHERE w.user_id = r.user_id;
