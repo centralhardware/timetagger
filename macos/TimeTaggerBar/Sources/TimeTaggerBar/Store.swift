@@ -220,6 +220,12 @@ final class Store: ObservableObject {
         }
     }
 
+    /// Biggest first; equal totals by name. A dictionary's order changes on every
+    /// refresh, so without the tie-break two equal totals kept swapping places (and colours).
+    nonisolated static func biggestFirst(_ a: (key: String, value: Int), _ b: (key: String, value: Int)) -> Bool {
+        a.value != b.value ? a.value > b.value : a.key < b.key
+    }
+
     /// Today's time per ticket, biggest first.
     var totalsByTicket: [(String, Int)] {
         var sums: [String: Int] = [:]
@@ -229,7 +235,7 @@ final class Store: ObservableObject {
             let a = max(r.t1, p1), b = min(r.isRunning ? now : r.t2, p2)
             if b > a { sums[t, default: 0] += b - a }
         }
-        return sums.sorted { $0.value > $1.value }
+        return sums.sorted(by: Store.biggestFirst)
     }
 
     var totalsByTag: [(String, Int)] {
@@ -241,7 +247,7 @@ final class Store: ObservableObject {
             let tags = r.tags.isEmpty ? ["untagged"] : r.tags
             for t in tags { sums[t, default: 0] += t2 - t1 }
         }
-        return sums.sorted { $0.value > $1.value }
+        return sums.sorted(by: Store.biggestFirst)
     }
 
     var total: Int {

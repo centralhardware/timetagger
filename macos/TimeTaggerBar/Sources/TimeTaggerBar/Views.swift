@@ -308,7 +308,7 @@ struct MenuView: View {
             for t in r.tags { tags[t, default: 0] += r.duration() }
             if r.ticket == nil && r.tags.isEmpty { tags["untagged", default: 0] += r.duration() }
         }
-        return tickets.sorted { $0.value > $1.value } + tags.sorted { $0.value > $1.value }
+        return tickets.sorted(by: Store.biggestFirst) + tags.sorted(by: Store.biggestFirst)
     }
 
     private func load(_ op: () async throws -> Void) async {
