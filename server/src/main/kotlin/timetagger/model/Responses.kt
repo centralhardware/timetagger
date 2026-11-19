@@ -49,7 +49,7 @@ data class VersionResponse(val version: String)
 
 /** Everything written after revision `since`, and the revision to pass next time. */
 @Serializable
-data class Changes(val revision: Long, val records: List<Record>, val settings: List<Setting>)
+data class Changes(val revision: Long, val records: List<Record>, val settings: List<Setting>, val workspaces: List<Workspace> = emptyList())
 
 /** Every error response: a machine-readable code and a human message. */
 @Serializable

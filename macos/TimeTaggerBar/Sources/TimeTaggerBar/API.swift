@@ -18,6 +18,8 @@ struct Record: Codable, Identifiable, Hashable {
     var ticket: String? = nil
     /// "gap" for named time off (lunch, dinner): shown as a gap, never counted as work. Nil means work.
     var kind: String? = nil
+    /// The workspace (Work, Personal, …); nil for none.
+    var workspaceId: Int64? = nil
 
     var id: String { key }
     var isGap: Bool { kind == "gap" }
@@ -107,6 +109,18 @@ actor AuthSession {
 }
 
 /// The record as the v1 API sends and receives it.
+/// A set of records the user switches between (Work, Personal, …).
+struct Workspace: Codable, Identifiable, Hashable {
+    let id: Int64
+    var name: String
+
+    /// The workspace being shown on this Mac; nil shows every record.
+    static var selectedID: Int64? {
+        let v = UserDefaults.standard.integer(forKey: "workspaceID")
+        return v == 0 ? nil : Int64(v)
+    }
+}
+
 private struct WireRecord: Codable {
     /// Absent for a new record: the server assigns it.
     var id: Int64?
@@ -119,6 +133,7 @@ private struct WireRecord: Codable {
     var deletedAt: Date?
     var revision: Int64?
     var kind: String?
+    var workspaceId: Int64?
 
     init(_ r: Record) {
         id = Int64(r.key)
@@ -130,6 +145,8 @@ private struct WireRecord: Codable {
         deleted = r.isDeleted
         revision = r.rev == 0 ? nil : r.rev
         kind = r.kind
+        // A new record goes into the workspace being shown.
+        workspaceId = r.workspaceId ?? (r.key.isEmpty ? Workspace.selectedID : nil)
     }
 
     var record: Record {
@@ -138,7 +155,7 @@ private struct WireRecord: Codable {
             key: id.map(String.init) ?? "", rev: revision ?? 0, t1: t1,
             t2: stop.map { Int($0.timeIntervalSince1970) } ?? t1, ds: description,
             tags: tags ?? [], deleted: deletedAt == nil ? 0 : 1, st: nil, ticket: ticket,
-            kind: kind == "gap" ? "gap" : nil
+            kind: kind == "gap" ? "gap" : nil, workspaceId: workspaceId
         )
     }
 }
@@ -217,9 +234,27 @@ struct API {
         let query = [
             URLQueryItem(name: "from", value: Self.iso.string(from: Date(timeIntervalSince1970: TimeInterval(t1)))),
             URLQueryItem(name: "to", value: Self.iso.string(from: Date(timeIntervalSince1970: TimeInterval(t2)))),
-        ]
+        ] + Self.workspaceQuery
         struct Resp: Decodable { let records: [WireRecord] }
         return try Self.decoder.decode(Resp.self, from: try await send(URLRequest(url: try url("records", query)))).records.map(\.record)
+    }
+
+    /// Every listing is limited to the workspace being shown (none picked: everything).
+    private static var workspaceQuery: [URLQueryItem] {
+        Workspace.selectedID.map { [URLQueryItem(name: "workspace", value: String($0))] } ?? []
+    }
+
+    func workspaces() async throws -> [Workspace] {
+        struct Resp: Decodable { let workspaces: [Workspace] }
+        return try Self.decoder.decode(Resp.self, from: try await send(URLRequest(url: try url("workspaces")))).workspaces
+    }
+
+    func createWorkspace(_ name: String) async throws -> Workspace {
+        var req = URLRequest(url: try url("workspaces"))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try Self.encoder.encode(["name": name])
+        return try Self.decoder.decode(Workspace.self, from: try await send(req))
     }
 
     /// The tags in use, most recently used first.
@@ -271,7 +306,7 @@ struct API {
     func search(_ text: String) async throws -> [Record] {
         struct Resp: Decodable { let records: [WireRecord] }
         let q = String(text.drop(while: { $0 == "#" }))
-        let data = try await send(URLRequest(url: try url("records", [URLQueryItem(name: "q", value: q)])))
+        let data = try await send(URLRequest(url: try url("records", [URLQueryItem(name: "q", value: q)] + Self.workspaceQuery)))
         return try Self.decoder.decode(Resp.self, from: data).records.map(\.record).sorted { $0.t1 > $1.t1 }
     }
 

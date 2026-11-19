@@ -287,7 +287,7 @@ class ApiTest {
 
     @Test
     fun syncSnapshotCoversWhatItReturns() = runBlocking {
-        val sync = SyncService(db, RecordRepository(), SettingRepository())
+        val sync = SyncService(db, RecordRepository(), SettingRepository(), timetagger.db.WorkspaceRepository())
         val records = RecordService(db, RecordRepository())
         val alice = db.io { UserRepository().byName(it, "alice") }!!.id
         val start = Instant.parse("2026-10-28T08:00:00Z")

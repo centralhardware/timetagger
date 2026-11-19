@@ -17,11 +17,13 @@ data class RecordFilter(
     /** Case-insensitive substring of the description or of a tag. */
     val text: String? = null,
     val deleted: Boolean = false,
+    /** Only records in this workspace. */
+    val workspaceId: Long? = null,
 )
 
 class RecordRepository {
     private val select = """
-        SELECT r.id, r.start_at, r.stop_at, r.description, r.ticket, r.deleted_at, r.revision, r.kind,
+        SELECT r.id, r.start_at, r.stop_at, r.description, r.ticket, r.deleted_at, r.revision, r.kind, r.workspace_id,
                array(SELECT t.tag FROM record_tags t WHERE t.record_id = r.id ORDER BY t.tag) AS tags
         FROM records r
     """.trimIndent()
@@ -36,6 +38,7 @@ class RecordRepository {
         deletedAt = row.instantOrNull("deleted_at"),
         revision = row.long("revision"),
         kind = RecordKind.of(row.string("kind")),
+        workspaceId = row.longOrNull("workspace_id"),
     )
 
     /** Records overlapping [from, to]; a running record counts as lasting until now. */
@@ -50,6 +53,7 @@ class RecordRepository {
             where += "(r.description ILIKE :text ESCAPE '\\' OR r.ticket ILIKE :text ESCAPE '\\' OR EXISTS (SELECT 1 FROM record_tags t WHERE t.record_id = r.id AND t.tag ILIKE :text ESCAPE '\\'))"
             params["text"] = "%" + it.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
         }
+        f.workspaceId?.let { where += "r.workspace_id = :workspace"; params["workspace"] = it }
         f.running?.let { where += if (it) "r.stop_at IS NULL" else "r.stop_at IS NOT NULL" }
         where += if (f.deleted) "r.deleted_at IS NOT NULL" else "r.deleted_at IS NULL"
         return session.list(queryOf("$select WHERE ${where.joinToString(" AND ")} ORDER BY r.start_at", params), ::record)
@@ -77,18 +81,18 @@ class RecordRepository {
     /** Creates the record (the database picks the id) with a new revision and its tags. */
     fun create(
         session: Session, userId: Long, start: Instant, stop: Instant?,
-        description: String, ticket: String?, tags: List<String>, deletedAt: Instant?, kind: RecordKind = RecordKind.WORK,
+        description: String, ticket: String?, tags: List<String>, deletedAt: Instant?, kind: RecordKind = RecordKind.WORK, workspaceId: Long? = null,
     ): Record {
         val id = session.single(
             queryOf(
                 """
-                INSERT INTO records (user_id, start_at, stop_at, description, ticket, deleted_at, kind)
-                VALUES (:user, :start, :stop, :description, :ticket, :deleted, :kind)
+                INSERT INTO records (user_id, start_at, stop_at, description, ticket, deleted_at, kind, workspace_id)
+                VALUES (:user, :start, :stop, :description, :ticket, :deleted, :kind, :workspace)
                 RETURNING id
                 """,
                 mapOf(
                     "user" to userId, "start" to start, "stop" to stop,
-                    "description" to description, "ticket" to ticket, "deleted" to deletedAt, "kind" to kind.db,
+                    "description" to description, "ticket" to ticket, "deleted" to deletedAt, "kind" to kind.db, "workspace" to workspaceId,
                 ),
             ),
         ) { it.long("id") }!!
@@ -98,18 +102,18 @@ class RecordRepository {
     /** Replaces the record's fields, stamps a new revision and rewrites its tags; a null [kind] keeps it. */
     fun update(
         session: Session, userId: Long, id: Long, start: Instant, stop: Instant?,
-        description: String, ticket: String?, tags: List<String>, deletedAt: Instant?, kind: RecordKind? = null,
+        description: String, ticket: String?, tags: List<String>, deletedAt: Instant?, kind: RecordKind? = null, workspaceId: Long? = null,
     ): Record {
         session.update(
             queryOf(
                 """
                 UPDATE records SET start_at = :start, stop_at = :stop, description = :description, ticket = :ticket,
-                    deleted_at = :deleted, kind = coalesce(:kind, kind), updated_at = now(), revision = nextval('revision_seq')
+                    deleted_at = :deleted, kind = coalesce(:kind, kind), workspace_id = coalesce(:workspace, workspace_id), updated_at = now(), revision = nextval('revision_seq')
                 WHERE user_id = :user AND id = :id
                 """,
                 mapOf(
                     "user" to userId, "id" to id, "start" to start, "stop" to stop,
-                    "description" to description, "ticket" to ticket, "deleted" to deletedAt, "kind" to kind?.db,
+                    "description" to description, "ticket" to ticket, "deleted" to deletedAt, "kind" to kind?.db, "workspace" to workspaceId,
                 ),
             ),
         )

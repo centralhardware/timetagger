@@ -7,6 +7,7 @@ import timetagger.NotFound
 import timetagger.db.Database
 import timetagger.db.RecordFilter
 import timetagger.db.RecordRepository
+import timetagger.db.WorkspaceRepository
 import timetagger.model.Record
 import timetagger.model.RecordKind
 import timetagger.model.RecordInput
@@ -19,7 +20,7 @@ private const val TAGS_MAX = 50
 private const val TAG_MAX = 100
 private val FAR_FUTURE: Instant = Instant.parse("9999-12-31T00:00:00Z")
 
-class RecordService(private val db: Database, private val records: RecordRepository) {
+class RecordService(private val db: Database, private val records: RecordRepository, private val workspaces: WorkspaceRepository = WorkspaceRepository()) {
     suspend fun find(userId: Long, filter: RecordFilter): List<Record> = db.io { records.find(it, userId, filter) }
 
     suspend fun tags(userId: Long): List<String> = db.io { records.tags(it, userId) }
@@ -47,7 +48,8 @@ class RecordService(private val db: Database, private val records: RecordReposit
         val kind = input.kind ?: RecordKind.WORK
         if (kind == RecordKind.GAP && input.stop == null) throw Invalid("a gap must have a stop")
         if (input.stop == null && !input.deleted) stopRunning(session, userId, input.start)
-        return records.create(session, userId, input.start, input.stop, input.description.trim(), ticket(input), tags, Instant.now().takeIf { input.deleted }, kind)
+        checkWorkspace(session, userId, input.workspaceId)
+        return records.create(session, userId, input.start, input.stop, input.description.trim(), ticket(input), tags, Instant.now().takeIf { input.deleted }, kind, input.workspaceId)
     }
 
     /** Only one record runs at a time: starting one stops whatever was running, when the new one starts. */
@@ -63,7 +65,7 @@ class RecordService(private val db: Database, private val records: RecordReposit
         if (input.revision != null && input.revision != cur.revision) throw Conflict(cur)
         val deletedAt = if (input.deleted) cur.deletedAt ?: Instant.now() else null
         if ((input.kind ?: cur.kind) == RecordKind.GAP && input.stop == null) throw Invalid("a gap must have a stop")
-        return records.update(session, userId, id, input.start, input.stop, input.description.trim(), ticket(input), tags, deletedAt, input.kind)
+        return records.update(session, userId, id, input.start, input.stop, input.description.trim(), ticket(input), tags, deletedAt, input.kind, input.workspaceId.also { checkWorkspace(session, userId, it) })
     }
 
     /** Returns the normalized tags. */
@@ -78,6 +80,11 @@ class RecordService(private val db: Database, private val records: RecordReposit
 
     private fun ticket(input: RecordInput): String? =
         try { Tickets.normalize(input.ticket) } catch (e: IllegalArgumentException) { throw Invalid(e.message ?: "invalid ticket") }
+
+    private fun checkWorkspace(session: Session, userId: Long, id: Long?) {
+        if (id != null && workspaces.get(session, userId, id)?.deletedAt != null) throw Invalid("workspace $id is deleted")
+        if (id != null && workspaces.get(session, userId, id) == null) throw Invalid("no workspace $id")
+    }
 
     /** A malformed id can't name any record. */
     private fun recordId(id: String): Long = id.toLongOrNull() ?: throw NotFound("record $id")

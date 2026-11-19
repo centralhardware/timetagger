@@ -27,9 +27,12 @@ import timetagger.model.RecordList
 import timetagger.model.SettingInput
 import timetagger.model.SettingList
 import timetagger.model.TagList
+import timetagger.model.WorkspaceInput
+import timetagger.model.WorkspaceList
 import timetagger.service.RecordService
 import timetagger.service.SettingService
 import timetagger.service.SyncService
+import timetagger.service.WorkspaceService
 import java.time.Instant
 import kotlin.time.Duration.Companion.seconds
 import org.slf4j.LoggerFactory
@@ -37,7 +40,7 @@ import org.slf4j.LoggerFactory
 private val log = LoggerFactory.getLogger("timetagger.sync")
 
 /**
- * GET /records?from&to[&tag=a&tag=b][&running][&deleted][&q=text] (with q, from and to are optional);
+ * GET /records?from&to[&tag=a&tag=b][&running][&deleted][&q=text][&workspace=id] (with q, from and to are optional);
  * POST /records creates one, stopping any running record if it is itself running;
  * GET, PUT and DELETE /records/{id}; POST /records/batch writes several in one transaction;
  * GET /records/tags lists the tags in use, most recent first (for autocomplete).
@@ -53,6 +56,7 @@ fun Route.recordRoutes(records: RecordService) = route("records") {
             running = call.boolParam("running"),
             deleted = call.boolParam("deleted") ?: false,
             text = q,
+            workspaceId = call.request.queryParameters["workspace"]?.let { it.toLongOrNull() ?: throw Invalid("workspace must be a workspace id") },
         )
         call.respond(RecordList(records.find(call.auth.userId, filter)))
     }
@@ -68,6 +72,19 @@ fun Route.recordRoutes(records: RecordService) = route("records") {
         put { call.respond(records.update(call.auth.userId, call.path("id"), call.receive<RecordInput>())) }
         delete {
             records.delete(call.auth.userId, call.path("id"))
+            call.respond(HttpStatusCode.NoContent)
+        }
+    }
+}
+
+/** GET /workspaces; POST /workspaces {name}; PUT and DELETE /workspaces/{id}. */
+fun Route.workspaceRoutes(workspaces: WorkspaceService) = route("workspaces") {
+    get { call.respond(WorkspaceList(workspaces.all(call.auth.userId))) }
+    post { call.respond(HttpStatusCode.Created, workspaces.create(call.auth.userId, call.receive<WorkspaceInput>().name)) }
+    route("{id}") {
+        put { call.respond(workspaces.rename(call.auth.userId, call.path("id"), call.receive<WorkspaceInput>().name)) }
+        delete {
+            workspaces.delete(call.auth.userId, call.path("id"))
             call.respond(HttpStatusCode.NoContent)
         }
     }

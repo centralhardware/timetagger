@@ -20,6 +20,8 @@ data class Record(
     val revision: Long,
     /** "work", or "gap" for named time off (lunch, dinner): shown as a gap, never counted as work. */
     val kind: RecordKind = RecordKind.WORK,
+    /** The workspace the record belongs to; null for none. */
+    val workspaceId: Long? = null,
 )
 
 /**
@@ -42,6 +44,8 @@ data class RecordInput(
     val revision: Long? = null,
     /** "work" or "gap"; omitted on an update keeps the record's kind, on a create means work. */
     val kind: RecordKind? = null,
+    /** The workspace; omitted on an update keeps the record's. */
+    val workspaceId: Long? = null,
 )
 
 /** Stored and sent as its [db] name; anything else in a request is rejected while decoding. */

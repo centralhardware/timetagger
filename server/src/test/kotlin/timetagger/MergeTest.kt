@@ -9,6 +9,8 @@ import timetagger.db.RecordRepository
 import timetagger.db.UserRepository
 import timetagger.model.Record
 import timetagger.model.RecordKind
+import timetagger.service.WorkspaceService
+import timetagger.db.WorkspaceRepository
 import timetagger.model.RecordInput
 import timetagger.service.MergeService
 import timetagger.service.RecordService
@@ -107,5 +109,28 @@ class MergeTest {
         kotlin.test.assertFailsWith<Invalid> { records.create(alice, RecordInput(start = at(5000), kind = RecordKind.GAP)) }
         // Same description, different kind: never merged.
         assertEquals(emptyList(), ids(listOf(rec(1, 0, 60, ds = "x"), rec(2, 61, 60, ds = "x").copy(kind = RecordKind.GAP))))
+    }
+
+    @Test
+    fun recordsBelongToAWorkspace() = runBlocking {
+        val records = RecordService(db, RecordRepository())
+        val spaces = WorkspaceService(db, WorkspaceRepository())
+        val alice = db.io { UserRepository().byName(it, "alice") }!!.id
+        fun at(s: Long) = t0.plusSeconds(s)
+        val work = spaces.create(alice, "Work")
+        val home = spaces.create(alice, "Personal")
+        kotlin.test.assertFailsWith<Invalid> { spaces.create(alice, " work ") }
+        val a = records.create(alice, RecordInput(start = at(0), stop = at(60), description = "x", workspaceId = work.id))
+        records.create(alice, RecordInput(start = at(100), stop = at(160), description = "y", workspaceId = home.id))
+        fun inSpace(id: Long) = runBlocking { records.find(alice, RecordFilter(from = at(0), to = at(1000), workspaceId = id)).map { it.description } }
+        assertEquals(listOf("x"), inSpace(work.id))
+        assertEquals(listOf("y"), inSpace(home.id))
+        // An update without workspaceId keeps it.
+        assertEquals(work.id, records.update(alice, a.id.toString(), RecordInput(start = at(0), stop = at(70), description = "x")).workspaceId)
+        spaces.delete(alice, home.id.toString())
+        assertEquals(listOf("Work"), spaces.all(alice).map { it.name })
+        kotlin.test.assertFailsWith<Invalid> { records.create(alice, RecordInput(start = at(200), stop = at(260), workspaceId = home.id)) }
+        // Same task in two workspaces: never merged.
+        assertEquals(emptyList(), ids(listOf(rec(1, 0, 60, ds = "x").copy(workspaceId = 1), rec(2, 61, 60, ds = "x").copy(workspaceId = 2))))
     }
 }
