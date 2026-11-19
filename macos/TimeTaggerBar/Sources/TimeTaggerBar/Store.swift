@@ -53,6 +53,9 @@ final class Store: ObservableObject {
     /// Gap records (kind "gap") from the loaded range; kept out of `records` and `lately`
     /// so totals, history and the timeline only ever see work.
     @Published var gaps: [Record] = []
+    @Published var workspaces: [Workspace] = []
+    /// The workspace shown on this Mac (0: all). Only the choice is per device; the workspaces sync.
+    @AppStorage("workspaceID") var workspaceID = 0
     /// What the server last held for each synced key, so pulling a value doesn't echo it back.
     private var syncedValues: [String: String] = [:]
     @AppStorage("remindIdle") var remindIdle = true
@@ -268,6 +271,8 @@ final class Store: ObservableObject {
         guard signedIn else { return }
         do {
             let (t1, t2) = period.range(in: workTimeZone)
+            workspaces = (try? await api.workspaces()) ?? workspaces
+            if workspaceID != 0, !workspaces.contains(where: { $0.id == Int64(workspaceID) }) { workspaceID = 0 }
             let period = try await api.records(from: t1, to: t2).filter { !$0.isDeleted }
             records = period.filter { !$0.isGap }.sorted { $0.t1 > $1.t1 }
             // Running records and today's total come from the last 30 days.
@@ -402,6 +407,20 @@ final class Store: ObservableObject {
         var r = record
         r.t2 = max(t, r.t1 + 1)
         await save([r], label: "Adjusted \u{201C}\(record.title)\u{201D}", before: [record])
+    }
+
+    func selectWorkspace(_ id: Int64?) async {
+        workspaceID = Int(id ?? 0)
+        await refresh()
+    }
+
+    func createWorkspace(_ name: String) async {
+        do {
+            let w = try await api.createWorkspace(name)
+            await selectWorkspace(w.id)
+        } catch {
+            self.error = error.localizedDescription
+        }
     }
 
     /// A marked gap is a record of kind "gap" over it: still a gap on screen, never work.

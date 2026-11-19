@@ -1,3 +1,4 @@
+import AppKit
 import ServiceManagement
 import SwiftUI
 
@@ -14,6 +15,7 @@ struct MenuView: View {
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
             VStack(alignment: .leading, spacing: 12) {
+                WorkspacePicker()
                 banners
                 if let r = store.running.first, editing?.id == r.id {
                     InlineEditor(record: r) { editing = nil }
@@ -62,7 +64,7 @@ struct MenuView: View {
         // Opening the popover puts the cursor in the task field: type and press Return.
         .onAppear { if store.running.isEmpty { fieldFocused = true } }
         // Reload whenever the store has refreshed (a write here or anywhere else).
-        .task(id: store.lately.hashValue) {
+        .task(id: store.lately.hashValue ^ store.workspaceID) {
             feed.calendar = store.workCalendar
             await load { try await feed.reload(store.api) }
         }
@@ -1125,6 +1127,46 @@ struct GapRow: View {
             .font(.caption).foregroundStyle(.secondary).monospacedDigit()
             .padding(.leading, 30).padding(.trailing, 12)
             .frame(height: 20)
+        }
+    }
+}
+
+/// Which workspace's records the window shows; also where new records go.
+struct WorkspacePicker: View {
+    @EnvironmentObject var store: Store
+
+    var body: some View {
+        let current = store.workspaces.first { $0.id == Int64(store.workspaceID) }
+        if !store.workspaces.isEmpty || store.signedIn {
+            Menu {
+                Button("All workspaces") { Task { await store.selectWorkspace(nil) } }
+                Divider()
+                ForEach(store.workspaces) { w in
+                    Button(w.name) { Task { await store.selectWorkspace(w.id) } }
+                }
+                Divider()
+                Button("New Workspace…") { askName() }
+            } label: {
+                Label(current?.name ?? "All workspaces", systemImage: "square.stack")
+            }
+            .menuStyle(.borderlessButton).fixedSize()
+            .font(.callout).foregroundStyle(.secondary)
+            .help("Show one workspace's records; new records go into it")
+        }
+    }
+
+    private func askName() {
+        let alert = NSAlert()
+        alert.messageText = "New Workspace"
+        alert.informativeText = "For example Work or Personal."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 220, height: 24))
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Create")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        if alert.runModal() == .alertFirstButtonReturn {
+            let n = field.stringValue.trimmingCharacters(in: .whitespaces)
+            if !n.isEmpty { Task { await store.createWorkspace(n) } }
         }
     }
 }
