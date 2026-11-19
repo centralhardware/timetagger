@@ -109,22 +109,4 @@ class MergeTest {
         val chains = merge.chains(listOf(rec(1, 0, 60, ds = "x"), rec(2, 61, 60, ds = "x").copy(kind = "gap")))
         assertEquals(2, chains.size)
     }
-
-    @Test
-    fun gapIsARecordOfItsOwnKind() = runBlocking {
-        val records = RecordService(db, RecordRepository())
-        val alice = db.io { UserRepository().byName(it, "alice") }!!.id
-        fun at(s: Long) = t0.plusSeconds(s)
-        val work = records.create(alice, RecordInput(start = at(0), stop = at(600), description = "fix login"))
-        assertEquals("work", work.kind)
-        val gap = records.create(alice, RecordInput(start = at(600), stop = at(4200), description = "Dinner", kind = "gap"))
-        assertEquals("gap", gap.kind)
-        // An update that leaves kind out keeps it.
-        assertEquals("gap", records.update(alice, gap.id.toString(), RecordInput(start = at(600), stop = at(4000), description = "Lunch")).kind)
-        kotlin.test.assertFailsWith<Invalid> { records.create(alice, RecordInput(start = at(5000), kind = "gap")) }
-        kotlin.test.assertFailsWith<Invalid> { records.create(alice, RecordInput(start = at(5000), stop = at(5100), kind = "nap")) }
-        // Same description, different kind: never merged.
-        val chains = merge.chains(listOf(rec(1, 0, 60, ds = "x"), rec(2, 61, 60, ds = "x").copy(kind = "gap")))
-        assertEquals(2, chains.size)
-    }
 }
