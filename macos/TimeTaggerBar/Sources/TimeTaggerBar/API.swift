@@ -222,6 +222,32 @@ struct API {
         return try Self.decoder.decode(Resp.self, from: try await send(URLRequest(url: try url("records/tags")))).tags
     }
 
+    /// The account's settings that are plain strings (the ones this app syncs), by key.
+    func settings() async throws -> [String: String] {
+        struct Item: Decodable {
+            let key: String; let value: String?
+            init(from d: Decoder) throws {
+                let c = try d.container(keyedBy: CodingKeys.self)
+                key = try c.decode(String.self, forKey: .key)
+                value = try? c.decode(String.self, forKey: .value)   // other JSON types belong to other clients
+            }
+            enum CodingKeys: String, CodingKey { case key, value }
+        }
+        struct Resp: Decodable { let settings: [Item] }
+        let items = try Self.decoder.decode(Resp.self, from: try await send(URLRequest(url: try url("settings")))).settings
+        return Dictionary(items.compactMap { i in i.value.map { (i.key, $0) } }) { a, _ in a }
+    }
+
+    /// Stores one string setting for the account (last write wins).
+    func putSetting(_ key: String, _ value: String) async throws {
+        var req = URLRequest(url: try url("settings/\(key)"))
+        req.httpMethod = "PUT"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        struct Body: Encodable { let value: String }
+        req.httpBody = try Self.encoder.encode(Body(value: value))
+        _ = try await send(req)
+    }
+
     /// Writes the records in one transaction (e.g. stop one and start the next);
     /// records without a server id are created.
     @discardableResult

@@ -46,6 +46,12 @@ final class Store: ObservableObject {
     @AppStorage("ticketURL") var ticketURL = ""
     /// Which project keys count as tickets ("ABC, XYZ"); empty accepts any. Read by Record.isTicket.
     @AppStorage("ticketPrefixes") var ticketPrefixes = ""
+    /// What an untracked gap can be marked as, comma-separated, most common first.
+    @AppStorage("breakKinds") var breakKindsText = "Lunch, Dinner, Breakfast, Coffee, Walk, Errand, Break"
+    /// Settings kept on the server so every device shares them; UserDefaults is only the local copy.
+    static let syncedKeys = ["ticketURL", "ticketPrefixes", "breakKinds"]
+    /// What the server last held for each synced key, so pulling a value doesn't echo it back.
+    private var syncedValues: [String: String] = [:]
     @AppStorage("remindIdle") var remindIdle = true
     @AppStorage("workStartHour") var workStartHour = 9
     @AppStorage("workEndHour") var workEndHour = 18
@@ -269,6 +275,7 @@ final class Store: ObservableObject {
             // Autocomplete is a nicety: a server without the endpoint just offers none.
             tags = (try? await api.tags()) ?? tags
             serverVersion = (try? await api.version()) ?? "unreachable"
+            await pullSettings()
             error = nil
         } catch APIError.signedOut {
             signedOutLocally()
@@ -401,8 +408,34 @@ final class Store: ObservableObject {
     }
 
     static let breakTag = "break"
-    /// What a gap can be marked as, most common first.
-    static let breakKinds = ["Lunch", "Dinner", "Breakfast", "Coffee", "Walk", "Errand", "Break"]
+    var breakKinds: [String] {
+        breakKindsText.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    }
+
+    /// Takes the server's synced settings; one this Mac set before the server had any is uploaded.
+    func pullSettings() async {
+        guard let remote = try? await api.settings() else { return }   // an older server has no /settings
+        let d = UserDefaults.standard
+        for k in Store.syncedKeys {
+            if let v = remote[k] {
+                syncedValues[k] = v
+                if d.string(forKey: k) != v { d.set(v, forKey: k); objectWillChange.send() }
+            } else if let local = d.string(forKey: k) {
+                await pushSetting(k, local)
+            }
+        }
+    }
+
+    /// Sends a synced setting the user just changed here.
+    func pushSetting(_ key: String, _ value: String) async {
+        guard signedIn, syncedValues[key] != value else { return }
+        do {
+            try await api.putSetting(key, value)
+            syncedValues[key] = value
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
 
     /// Joins back-to-back sessions into the earliest one, which then runs to the latest end.
     func merge(_ recs: [Record]) async {

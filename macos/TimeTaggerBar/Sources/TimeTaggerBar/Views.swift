@@ -767,6 +767,13 @@ struct SettingsView: View {
                     TextField("Ticket URL", text: $store.ticketURL, prompt: Text("https://company.atlassian.net/browse/{key}"))
                     Text("A ticket like ABC-123 links to this URL with {key} = ABC-123.").font(.caption).foregroundStyle(.secondary)
                 }
+                Section("Breaks") {
+                    TextField("Mark gap as", text: $store.breakKindsText, prompt: Text("Lunch, Dinner, Break"))
+                    Text("Comma-separated. Tickets and breaks are stored on the server and shared by all your devices.").font(.caption).foregroundStyle(.secondary)
+                }
+                .onChange(of: store.ticketPrefixes) { v in Task { await store.pushSetting("ticketPrefixes", v) } }
+                .onChange(of: store.ticketURL) { v in Task { await store.pushSetting("ticketURL", v) } }
+                .onChange(of: store.breakKindsText) { v in Task { await store.pushSetting("breakKinds", v) } }
             }
         case .reminders:
             pane {
@@ -1098,7 +1105,7 @@ struct GapRow: View {
                 Spacer()
                 if delta > 0 {
                     Menu("Mark as") {
-                        ForEach(Store.breakKinds, id: \.self) { kind in
+                        ForEach(store.breakKinds, id: \.self) { kind in
                             Button(kind) { Task { await store.markBreak(kind, from: earlier.t2, to: laterStart) } }
                         }
                     }
