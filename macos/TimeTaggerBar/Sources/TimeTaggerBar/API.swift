@@ -16,8 +16,11 @@ struct Record: Codable, Identifiable, Hashable {
     var st: Double?
     /// Upper case ticket key such as "ABC-123", kept apart from the description and tags.
     var ticket: String? = nil
+    /// "gap" for named time off (lunch, dinner): shown as a gap, never counted as work. Nil means work.
+    var kind: String? = nil
 
     var id: String { key }
+    var isGap: Bool { kind == "gap" }
     var isRunning: Bool { t1 == t2 }
     var isDeleted: Bool { (deleted ?? 0) != 0 }
 
@@ -115,6 +118,7 @@ private struct WireRecord: Codable {
     var deleted: Bool?
     var deletedAt: Date?
     var revision: Int64?
+    var kind: String?
 
     init(_ r: Record) {
         id = Int64(r.key)
@@ -125,6 +129,7 @@ private struct WireRecord: Codable {
         tags = r.tags
         deleted = r.isDeleted
         revision = r.rev == 0 ? nil : r.rev
+        kind = r.kind
     }
 
     var record: Record {
@@ -132,7 +137,8 @@ private struct WireRecord: Codable {
         return Record(
             key: id.map(String.init) ?? "", rev: revision ?? 0, t1: t1,
             t2: stop.map { Int($0.timeIntervalSince1970) } ?? t1, ds: description,
-            tags: tags ?? [], deleted: deletedAt == nil ? 0 : 1, st: nil, ticket: ticket
+            tags: tags ?? [], deleted: deletedAt == nil ? 0 : 1, st: nil, ticket: ticket,
+            kind: kind == "gap" ? "gap" : nil
         )
     }
 }

@@ -49,9 +49,10 @@ final class Store: ObservableObject {
     /// What an untracked gap can be marked as, comma-separated, most common first.
     @AppStorage("breakKinds") var breakKindsText = "Lunch, Dinner, Breakfast, Coffee, Walk, Errand, Break"
     /// Settings kept on the server so every device shares them; UserDefaults is only the local copy.
-    /// Gap names by gap start, as JSON ({"1763550000": "Dinner"}).
-    @AppStorage("gapLabels") var gapLabelsText = "{}"
-    static let syncedKeys = ["ticketURL", "ticketPrefixes", "breakKinds", "gapLabels"]
+    static let syncedKeys = ["ticketURL", "ticketPrefixes", "breakKinds"]
+    /// Gap records (kind "gap") from the loaded range; kept out of `records` and `lately`
+    /// so totals, history and the timeline only ever see work.
+    @Published var gaps: [Record] = []
     /// What the server last held for each synced key, so pulling a value doesn't echo it back.
     private var syncedValues: [String: String] = [:]
     @AppStorage("remindIdle") var remindIdle = true
@@ -267,12 +268,13 @@ final class Store: ObservableObject {
         guard signedIn else { return }
         do {
             let (t1, t2) = period.range(in: workTimeZone)
-            records = try await api.records(from: t1, to: t2)
-                .filter { !$0.isDeleted }
-                .sorted { $0.t1 > $1.t1 }
+            let period = try await api.records(from: t1, to: t2).filter { !$0.isDeleted }
+            records = period.filter { !$0.isGap }.sorted { $0.t1 > $1.t1 }
             // Running records and today's total come from the last 30 days.
             let n = Int(Date().timeIntervalSince1970)
-            lately = try await api.records(from: n - 30 * 86400, to: n + 86400).filter { !$0.isDeleted }
+            let recent = try await api.records(from: n - 30 * 86400, to: n + 86400).filter { !$0.isDeleted }
+            lately = recent.filter { !$0.isGap }
+            gaps = Array(Dictionary((period + recent).filter(\.isGap).map { ($0.key, $0) }) { a, _ in a }.values)
             running = lately.filter(\.isRunning)
             // Autocomplete is a nicety: a server without the endpoint just offers none.
             tags = (try? await api.tags()) ?? tags
@@ -402,23 +404,20 @@ final class Store: ObservableObject {
         await save([r], label: "Adjusted \u{201C}\(record.title)\u{201D}", before: [record])
     }
 
-    /// A gap stays a gap; marking it only names it ("Dinner"). Labels are kept by the gap's
-    /// start (the earlier record's end) in the synced "gapLabels" setting.
-    func gapLabel(at start: Int) -> String? { gapLabels[String(start)] }
-
-    func markGap(at start: Int, as label: String?) async {
-        var m = gapLabels
-        m[String(start)] = label
-        // Only the last 90 days: the server caps a setting at 8 KB.
-        let cutoff = Int(Date().timeIntervalSince1970) - 90 * 86400
-        m = m.filter { (Int($0.key) ?? 0) >= cutoff }
-        guard let data = try? JSONEncoder().encode(m), let text = String(data: data, encoding: .utf8) else { return }
-        gapLabelsText = text
-        await pushSetting("gapLabels", text)
+    /// A marked gap is a record of kind "gap" over it: still a gap on screen, never work.
+    func gapRecord(from t1: Int, to t2: Int) -> Record? {
+        gaps.first { !$0.isDeleted && $0.t1 < t2 && $0.t2 > t1 }
     }
 
-    private var gapLabels: [String: String] {
-        (try? JSONDecoder().decode([String: String].self, from: Data(gapLabelsText.utf8))) ?? [:]
+    /// Names the gap [t1, t2] (creating its gap record), renames it, or with nil clears it.
+    func markGap(from t1: Int, to t2: Int, as label: String?) async {
+        if var g = gapRecord(from: t1, to: t2) {
+            if let label { g.ds = label; g.t1 = t1; g.t2 = t2 } else { g.deleted = 1 }
+            await save([g], label: label == nil ? "Cleared gap" : "Marked gap \u{201C}\(label!)\u{201D}", before: [gapRecord(from: t1, to: t2)!])
+        } else if let label, t2 > t1 {
+            let new = Record(key: Record.newKey(), rev: 0, t1: t1, t2: t2, ds: label, tags: [], deleted: 0, kind: "gap")
+            await save([new], label: "Marked gap \u{201C}\(label)\u{201D}")
+        }
     }
 
     var breakKinds: [String] {

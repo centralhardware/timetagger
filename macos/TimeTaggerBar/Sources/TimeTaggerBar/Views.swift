@@ -769,7 +769,7 @@ struct SettingsView: View {
                 }
                 Section("Breaks") {
                     TextField("Gap names", text: $store.breakKindsText, prompt: Text("Lunch, Dinner, Break"))
-                    Text("Comma-separated. Tickets, gap names and labelled gaps are stored on the server and shared by all your devices.").font(.caption).foregroundStyle(.secondary)
+                    Text("Comma-separated. A marked gap is a gap record on the server, so every device shows it.").font(.caption).foregroundStyle(.secondary)
                 }
                 .onChange(of: store.ticketPrefixes) { v in Task { await store.pushSetting("ticketPrefixes", v) } }
                 .onChange(of: store.ticketURL) { v in Task { await store.pushSetting("ticketURL", v) } }
@@ -1101,18 +1101,18 @@ struct GapRow: View {
         if !earlier.isRunning, delta >= 5 * 60 || delta <= -60, delta < 4 * 3600 {
             HStack(spacing: 6) {
                 Rectangle().fill(delta > 0 ? Color.secondary.opacity(0.3) : Color.orange.opacity(0.6)).frame(width: 2, height: 14)
-                let label = delta > 0 ? store.gapLabel(at: earlier.t2) : nil
+                let label = delta > 0 ? store.gapRecord(from: earlier.t2, to: laterStart)?.ds : nil
                 Text(delta > 0 ? "\(Store.format(delta, seconds: false)) \(label ?? "untracked")" : "\(Store.format(-delta, seconds: false)) overlap")
                     .foregroundStyle(label == nil ? .secondary : .primary)
                 Spacer()
                 if delta > 0 {
                     Menu(label == nil ? "Mark as" : "Change") {
                         ForEach(store.breakKinds, id: \.self) { kind in
-                            Button(kind) { Task { await store.markGap(at: earlier.t2, as: kind) } }
+                            Button(kind) { Task { await store.markGap(from: earlier.t2, to: laterStart, as: kind) } }
                         }
                         if label != nil {
                             Divider()
-                            Button("Clear") { Task { await store.markGap(at: earlier.t2, as: nil) } }
+                            Button("Clear") { Task { await store.markGap(from: earlier.t2, to: laterStart, as: nil) } }
                         }
                     }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()

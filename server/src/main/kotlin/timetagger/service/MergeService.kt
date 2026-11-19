@@ -78,7 +78,7 @@ class MergeService(
             }
             val prev = current.lastOrNull()
             val gapToPrev = prev?.stop?.let { Duration.between(it, r.start) }
-            if (prev != null && prev.description.trim() == r.description.trim() && prev.ticket == r.ticket && clean(prev.tags) == clean(r.tags) &&
+            if (prev != null && prev.kind == r.kind && prev.description.trim() == r.description.trim() && prev.ticket == r.ticket && clean(prev.tags) == clean(r.tags) &&
                 gapToPrev != null && !gapToPrev.isNegative && gapToPrev <= gap
             ) {
                 current += r

@@ -53,6 +53,6 @@ final class DayFeed: ObservableObject {
     /// Records that started in [from, to), so a record crossing midnight belongs to one day only.
     private func fetch(_ api: API, from: Date, to: Date) async throws -> [Record] {
         let t1 = Int(from.timeIntervalSince1970), t2 = Int(to.timeIntervalSince1970)
-        return try await api.records(from: t1, to: t2).filter { !$0.isDeleted && $0.t1 >= t1 && $0.t1 < t2 }
+        return try await api.records(from: t1, to: t2).filter { !$0.isDeleted && !$0.isGap && $0.t1 >= t1 && $0.t1 < t2 }
     }
 }

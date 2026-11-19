@@ -17,6 +17,8 @@ data class Record(
     val deletedAt: IsoInstant?,
     /** Increases with every write; see GET /changes. */
     val revision: Long,
+    /** "work", or "gap" for named time off (lunch, dinner): shown as a gap, never counted as work. */
+    val kind: String = Kinds.WORK,
 )
 
 /**
@@ -37,7 +39,15 @@ data class RecordInput(
     val deleted: Boolean = false,
     /** The revision the client last read; if the record has moved on since, the write is rejected with 409. Omit to overwrite. */
     val revision: Long? = null,
+    /** "work" or "gap"; omitted on an update keeps the record's kind, on a create means work. */
+    val kind: String? = null,
 )
+
+object Kinds {
+    const val WORK = "work"
+    const val GAP = "gap"
+    val all = setOf(WORK, GAP)
+}
 
 /** The user's tags, most recently used first. */
 @Serializable
