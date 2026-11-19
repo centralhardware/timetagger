@@ -42,8 +42,19 @@ final class Store: ObservableObject {
     @AppStorage("showWorkTime") var showWorkTime = true
     @AppStorage("pauseOnSleep") var pauseOnSleep = true
     @AppStorage("username") var username = ""
-    /// Where a ticket tag like #sm-1061 opens; {key} becomes SM-1061. Empty turns the links off.
+    /// Where a ticket tag like #abc-123 opens; {key} becomes ABC-123. Empty turns the links off.
     @AppStorage("ticketURL") var ticketURL = ""
+    /// Which project keys count as tickets ("ABC, XYZ"); empty accepts any. Read by Record.isTicket.
+    @AppStorage("ticketPrefixes") var ticketPrefixes = ""
+    /// What an untracked gap can be marked as, comma-separated, most common first.
+    @AppStorage("breakKinds") var breakKindsText = "Lunch, Dinner, Breakfast, Coffee, Walk, Errand, Break"
+    /// Settings kept on the server so every device shares them; UserDefaults is only the local copy.
+    static let syncedKeys = ["ticketURL", "ticketPrefixes", "breakKinds"]
+    /// Gap records (kind "gap") from the loaded range; kept out of `records` and `lately`
+    /// so totals, history and the timeline only ever see work.
+    @Published var gaps: [Record] = []
+    /// What the server last held for each synced key, so pulling a value doesn't echo it back.
+    private var syncedValues: [String: String] = [:]
     @AppStorage("remindIdle") var remindIdle = true
     @AppStorage("workStartHour") var workStartHour = 9
     @AppStorage("workEndHour") var workEndHour = 18
@@ -218,6 +229,12 @@ final class Store: ObservableObject {
         }
     }
 
+    /// Biggest first; equal totals by name. A dictionary's order changes on every
+    /// refresh, so without the tie-break two equal totals kept swapping places (and colours).
+    nonisolated static func biggestFirst(_ a: (key: String, value: Int), _ b: (key: String, value: Int)) -> Bool {
+        a.value != b.value ? a.value > b.value : a.key < b.key
+    }
+
     /// Today's time per ticket, biggest first.
     var totalsByTicket: [(String, Int)] {
         var sums: [String: Int] = [:]
@@ -227,7 +244,7 @@ final class Store: ObservableObject {
             let a = max(r.t1, p1), b = min(r.isRunning ? now : r.t2, p2)
             if b > a { sums[t, default: 0] += b - a }
         }
-        return sums.sorted { $0.value > $1.value }
+        return sums.sorted(by: Store.biggestFirst)
     }
 
     var totalsByTag: [(String, Int)] {
@@ -239,7 +256,7 @@ final class Store: ObservableObject {
             let tags = r.tags.isEmpty ? ["untagged"] : r.tags
             for t in tags { sums[t, default: 0] += t2 - t1 }
         }
-        return sums.sorted { $0.value > $1.value }
+        return sums.sorted(by: Store.biggestFirst)
     }
 
     var total: Int {
@@ -251,16 +268,18 @@ final class Store: ObservableObject {
         guard signedIn else { return }
         do {
             let (t1, t2) = period.range(in: workTimeZone)
-            records = try await api.records(from: t1, to: t2)
-                .filter { !$0.isDeleted }
-                .sorted { $0.t1 > $1.t1 }
+            let period = try await api.records(from: t1, to: t2).filter { !$0.isDeleted }
+            records = period.filter { !$0.isGap }.sorted { $0.t1 > $1.t1 }
             // Running records and today's total come from the last 30 days.
             let n = Int(Date().timeIntervalSince1970)
-            lately = try await api.records(from: n - 30 * 86400, to: n + 86400).filter { !$0.isDeleted }
+            let recent = try await api.records(from: n - 30 * 86400, to: n + 86400).filter { !$0.isDeleted }
+            lately = recent.filter { !$0.isGap }
+            gaps = Array(Dictionary((period + recent).filter(\.isGap).map { ($0.key, $0) }) { a, _ in a }.values)
             running = lately.filter(\.isRunning)
             // Autocomplete is a nicety: a server without the endpoint just offers none.
             tags = (try? await api.tags()) ?? tags
             serverVersion = (try? await api.version()) ?? "unreachable"
+            await pullSettings()
             error = nil
         } catch APIError.signedOut {
             signedOutLocally()
@@ -336,9 +355,9 @@ final class Store: ObservableObject {
         }
     }
 
-    /// The link for a ticket tag such as "sm-1061", if a ticket URL is set and the tag looks like a key.
+    /// The link for a ticket tag such as "abc-123", if a ticket URL is set and the tag looks like a key.
     func ticketLink(_ tag: String) -> URL? {
-        guard !ticketURL.isEmpty, tag.range(of: #"^[a-z][a-z0-9]*-\d+$"#, options: .regularExpression) != nil else { return nil }
+        guard !ticketURL.isEmpty, Record.isTicket(tag) else { return nil }
         return URL(string: ticketURL.replacingOccurrences(of: "{key}", with: tag.uppercased()))
     }
 
@@ -383,6 +402,51 @@ final class Store: ObservableObject {
         var r = record
         r.t2 = max(t, r.t1 + 1)
         await save([r], label: "Adjusted \u{201C}\(record.title)\u{201D}", before: [record])
+    }
+
+    /// A marked gap is a record of kind "gap" over it: still a gap on screen, never work.
+    func gapRecord(from t1: Int, to t2: Int) -> Record? {
+        gaps.first { !$0.isDeleted && $0.t1 < t2 && $0.t2 > t1 }
+    }
+
+    /// Names the gap [t1, t2] (creating its gap record), renames it, or with nil clears it.
+    func markGap(from t1: Int, to t2: Int, as label: String?) async {
+        if var g = gapRecord(from: t1, to: t2) {
+            if let label { g.ds = label; g.t1 = t1; g.t2 = t2 } else { g.deleted = 1 }
+            await save([g], label: label == nil ? "Cleared gap" : "Marked gap \u{201C}\(label!)\u{201D}", before: [gapRecord(from: t1, to: t2)!])
+        } else if let label, t2 > t1 {
+            let new = Record(key: Record.newKey(), rev: 0, t1: t1, t2: t2, ds: label, tags: [], deleted: 0, kind: "gap")
+            await save([new], label: "Marked gap \u{201C}\(label)\u{201D}")
+        }
+    }
+
+    var breakKinds: [String] {
+        breakKindsText.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    }
+
+    /// Takes the server's synced settings; one this Mac set before the server had any is uploaded.
+    func pullSettings() async {
+        guard let remote = try? await api.settings() else { return }   // an older server has no /settings
+        let d = UserDefaults.standard
+        for k in Store.syncedKeys {
+            if let v = remote[k] {
+                syncedValues[k] = v
+                if d.string(forKey: k) != v { d.set(v, forKey: k); objectWillChange.send() }
+            } else if let local = d.string(forKey: k) {
+                await pushSetting(k, local)
+            }
+        }
+    }
+
+    /// Sends a synced setting the user just changed here.
+    func pushSetting(_ key: String, _ value: String) async {
+        guard signedIn, syncedValues[key] != value else { return }
+        do {
+            try await api.putSetting(key, value)
+            syncedValues[key] = value
+        } catch {
+            self.error = error.localizedDescription
+        }
     }
 
     /// Joins back-to-back sessions into the earliest one, which then runs to the latest end.

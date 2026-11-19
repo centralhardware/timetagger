@@ -1,5 +1,6 @@
 package timetagger.model
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /** A time record. It is running while `stop` is null; a deleted record keeps its row so clients sync the delete. */
@@ -17,6 +18,8 @@ data class Record(
     val deletedAt: IsoInstant?,
     /** Increases with every write; see GET /changes. */
     val revision: Long,
+    /** "work", or "gap" for named time off (lunch, dinner): shown as a gap, never counted as work. */
+    val kind: RecordKind = RecordKind.WORK,
 )
 
 /**
@@ -37,7 +40,21 @@ data class RecordInput(
     val deleted: Boolean = false,
     /** The revision the client last read; if the record has moved on since, the write is rejected with 409. Omit to overwrite. */
     val revision: Long? = null,
+    /** "work" or "gap"; omitted on an update keeps the record's kind, on a create means work. */
+    val kind: RecordKind? = null,
 )
+
+/** Stored and sent as its [db] name; anything else in a request is rejected while decoding. */
+@Serializable
+enum class RecordKind(val db: String) {
+    @SerialName("work") WORK("work"),
+    /** Named time off (lunch, dinner): shown as a gap, never counted as work. */
+    @SerialName("gap") GAP("gap");
+
+    companion object {
+        fun of(db: String): RecordKind = entries.first { it.db == db }
+    }
+}
 
 /** The user's tags, most recently used first. */
 @Serializable

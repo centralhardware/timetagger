@@ -8,6 +8,7 @@ import timetagger.db.RecordFilter
 import timetagger.db.RecordRepository
 import timetagger.db.UserRepository
 import timetagger.model.Record
+import timetagger.model.RecordKind
 import timetagger.model.RecordInput
 import timetagger.service.MergeService
 import timetagger.service.RecordService
@@ -90,5 +91,21 @@ class MergeTest {
         val chains = merge.chains(listOf(rec(1, 0, 60).copy(ticket = "SM-1"), rec(2, 61, 60).copy(ticket = "SM-2")))
         assertEquals(2, chains.size)
         kotlin.test.assertFailsWith<Invalid> { records.create(alice, RecordInput(start = at(2000), ticket = "not a key")) }
+    }
+
+    @Test
+    fun gapIsARecordOfItsOwnKind() = runBlocking {
+        val records = RecordService(db, RecordRepository())
+        val alice = db.io { UserRepository().byName(it, "alice") }!!.id
+        fun at(s: Long) = t0.plusSeconds(s)
+        val work = records.create(alice, RecordInput(start = at(0), stop = at(600), description = "fix login"))
+        assertEquals(RecordKind.WORK, work.kind)
+        val gap = records.create(alice, RecordInput(start = at(600), stop = at(4200), description = "Dinner", kind = RecordKind.GAP))
+        assertEquals(RecordKind.GAP, gap.kind)
+        // An update that leaves kind out keeps it.
+        assertEquals(RecordKind.GAP, records.update(alice, gap.id.toString(), RecordInput(start = at(600), stop = at(4000), description = "Lunch")).kind)
+        kotlin.test.assertFailsWith<Invalid> { records.create(alice, RecordInput(start = at(5000), kind = RecordKind.GAP)) }
+        // Same description, different kind: never merged.
+        assertEquals(emptyList(), ids(listOf(rec(1, 0, 60, ds = "x"), rec(2, 61, 60, ds = "x").copy(kind = RecordKind.GAP))))
     }
 }

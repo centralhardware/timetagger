@@ -14,10 +14,13 @@ struct Record: Codable, Identifiable, Hashable {
     var tags: [String] = []
     var deleted: Int?
     var st: Double?
-    /// Upper case ticket key such as "SM-1176", kept apart from the description and tags.
+    /// Upper case ticket key such as "ABC-123", kept apart from the description and tags.
     var ticket: String? = nil
+    /// "gap" for named time off (lunch, dinner): shown as a gap, never counted as work. Nil means work.
+    var kind: String? = nil
 
     var id: String { key }
+    var isGap: Bool { kind == "gap" }
     var isRunning: Bool { t1 == t2 }
     var isDeleted: Bool { (deleted ?? 0) != 0 }
 
@@ -25,7 +28,7 @@ struct Record: Codable, Identifiable, Hashable {
         (isRunning ? now : t2) - t1
     }
 
-    /// Tags typed as text ("#call core-12, x"): split on spaces and commas, '#' optional.
+    /// Tags typed as text ("#call abc-12, x"): split on spaces and commas, '#' optional.
     static func parseTags(_ text: String) -> [String] {
         var out: [String] = []
         for w in text.split(whereSeparator: { $0.isWhitespace || $0 == "," }) {
@@ -115,6 +118,7 @@ private struct WireRecord: Codable {
     var deleted: Bool?
     var deletedAt: Date?
     var revision: Int64?
+    var kind: String?
 
     init(_ r: Record) {
         id = Int64(r.key)
@@ -125,6 +129,7 @@ private struct WireRecord: Codable {
         tags = r.tags
         deleted = r.isDeleted
         revision = r.rev == 0 ? nil : r.rev
+        kind = r.kind
     }
 
     var record: Record {
@@ -132,7 +137,8 @@ private struct WireRecord: Codable {
         return Record(
             key: id.map(String.init) ?? "", rev: revision ?? 0, t1: t1,
             t2: stop.map { Int($0.timeIntervalSince1970) } ?? t1, ds: description,
-            tags: tags ?? [], deleted: deletedAt == nil ? 0 : 1, st: nil, ticket: ticket
+            tags: tags ?? [], deleted: deletedAt == nil ? 0 : 1, st: nil, ticket: ticket,
+            kind: kind == "gap" ? "gap" : nil
         )
     }
 }
@@ -220,6 +226,32 @@ struct API {
     func tags() async throws -> [String] {
         struct Resp: Decodable { let tags: [String] }
         return try Self.decoder.decode(Resp.self, from: try await send(URLRequest(url: try url("records/tags")))).tags
+    }
+
+    /// The account's settings that are plain strings (the ones this app syncs), by key.
+    func settings() async throws -> [String: String] {
+        struct Item: Decodable {
+            let key: String; let value: String?
+            init(from d: Decoder) throws {
+                let c = try d.container(keyedBy: CodingKeys.self)
+                key = try c.decode(String.self, forKey: .key)
+                value = try? c.decode(String.self, forKey: .value)   // other JSON types belong to other clients
+            }
+            enum CodingKeys: String, CodingKey { case key, value }
+        }
+        struct Resp: Decodable { let settings: [Item] }
+        let items = try Self.decoder.decode(Resp.self, from: try await send(URLRequest(url: try url("settings")))).settings
+        return Dictionary(items.compactMap { i in i.value.map { (i.key, $0) } }) { a, _ in a }
+    }
+
+    /// Stores one string setting for the account (last write wins).
+    func putSetting(_ key: String, _ value: String) async throws {
+        var req = URLRequest(url: try url("settings/\(key)"))
+        req.httpMethod = "PUT"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        struct Body: Encodable { let value: String }
+        req.httpBody = try Self.encoder.encode(Body(value: value))
+        _ = try await send(req)
     }
 
     /// Writes the records in one transaction (e.g. stop one and start the next);

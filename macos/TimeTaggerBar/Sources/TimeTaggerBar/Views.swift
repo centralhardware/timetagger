@@ -263,7 +263,7 @@ struct MenuView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// One field for everything: "SM-1176 fix login #call 25m ago".
+    /// One field for everything: "ABC-123 fix login #call 25m ago".
     private func taskField(_ prompt: String, icon: String?) -> some View {
         let parsed = QuickEntry.parse(draft)
         return VStack(alignment: .leading, spacing: 6) {
@@ -308,7 +308,7 @@ struct MenuView: View {
             for t in r.tags { tags[t, default: 0] += r.duration() }
             if r.ticket == nil && r.tags.isEmpty { tags["untagged", default: 0] += r.duration() }
         }
-        return tickets.sorted { $0.value > $1.value } + tags.sorted { $0.value > $1.value }
+        return tickets.sorted(by: Store.biggestFirst) + tags.sorted(by: Store.biggestFirst)
     }
 
     private func load(_ op: () async throws -> Void) async {
@@ -388,7 +388,7 @@ struct AccessSection: View {
     }
 }
 
-/// "Open SM-1061" for every ticket tag on the record, when a ticket URL is set.
+/// "Open ABC-123" for every ticket tag on the record, when a ticket URL is set.
 struct TicketLinks: View {
     @EnvironmentObject var store: Store
     let record: Record
@@ -479,7 +479,7 @@ struct InlineEditor: View {
             // Ticket and text are separate fields, as they are on the server.
             HStack(spacing: 6) {
                 field {
-                    TextField("Ticket", text: $ticket, prompt: Text("SM-1234")).textFieldStyle(.plain).onSubmit(save)
+                    TextField("Ticket", text: $ticket, prompt: Text("ABC-123")).textFieldStyle(.plain).onSubmit(save)
                         .font(.callout.monospaced())
                 }
                 .frame(width: 110)
@@ -762,9 +762,18 @@ struct SettingsView: View {
                     if !loginError.isEmpty { Text(loginError).font(.caption).foregroundStyle(.red) }
                 }
                 Section("Tickets") {
+                    TextField("Prefixes", text: $store.ticketPrefixes, prompt: Text("ABC, XYZ"))
+                    Text("Comma-separated project keys. Only these count as tickets; empty means any PREFIX-123.").font(.caption).foregroundStyle(.secondary)
                     TextField("Ticket URL", text: $store.ticketURL, prompt: Text("https://company.atlassian.net/browse/{key}"))
-                    Text("A tag like #sm-1061 links to this URL with {key} = SM-1061.").font(.caption).foregroundStyle(.secondary)
+                    Text("A ticket like ABC-123 links to this URL with {key} = ABC-123.").font(.caption).foregroundStyle(.secondary)
                 }
+                Section("Breaks") {
+                    TextField("Gap names", text: $store.breakKindsText, prompt: Text("Lunch, Dinner, Break"))
+                    Text("Comma-separated. A marked gap is a gap record on the server, so every device shows it.").font(.caption).foregroundStyle(.secondary)
+                }
+                .onChange(of: store.ticketPrefixes) { v in Task { await store.pushSetting("ticketPrefixes", v) } }
+                .onChange(of: store.ticketURL) { v in Task { await store.pushSetting("ticketURL", v) } }
+                .onChange(of: store.breakKindsText) { v in Task { await store.pushSetting("breakKinds", v) } }
             }
         case .reminders:
             pane {
@@ -832,9 +841,20 @@ extension Record {
         return "Untitled"
     }
 
-    /// A key like sm-1114 (lower case, as typed in tags or text).
+    /// A key like abc-123 (lower case, as typed in tags or text) whose prefix is one of
+    /// Settings → Tickets → Prefixes; with no prefixes set, any PREFIX-number counts.
     static func isTicket(_ tag: String) -> Bool {
-        tag.range(of: #"^[a-z][a-z0-9]*-\d+$"#, options: .regularExpression) != nil
+        guard tag.range(of: #"^[a-z][a-z0-9]*-\d+$"#, options: .regularExpression) != nil else { return false }
+        let prefixes = ticketPrefixes
+        return prefixes.isEmpty || prefixes.contains(String(tag.prefix(while: { $0 != "-" })))
+    }
+
+    /// The configured prefixes, lower case ("ABC, xyz" → ["abc", "xyz"]).
+    static var ticketPrefixes: Set<String> {
+        Set((UserDefaults.standard.string(forKey: "ticketPrefixes") ?? "")
+            .split(whereSeparator: { $0 == "," || $0.isWhitespace })
+            .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "-")).lowercased() }
+            .filter { !$0.isEmpty })
     }
 
     /// Same task = same description, ticket and tags.
@@ -1081,8 +1101,23 @@ struct GapRow: View {
         if !earlier.isRunning, delta >= 5 * 60 || delta <= -60, delta < 4 * 3600 {
             HStack(spacing: 6) {
                 Rectangle().fill(delta > 0 ? Color.secondary.opacity(0.3) : Color.orange.opacity(0.6)).frame(width: 2, height: 14)
-                Text(delta > 0 ? "\(Store.format(delta, seconds: false)) untracked" : "\(Store.format(-delta, seconds: false)) overlap")
+                let label = delta > 0 ? store.gapRecord(from: earlier.t2, to: laterStart)?.ds : nil
+                Text(delta > 0 ? "\(Store.format(delta, seconds: false)) \(label ?? "untracked")" : "\(Store.format(-delta, seconds: false)) overlap")
+                    .foregroundStyle(label == nil ? .secondary : .primary)
                 Spacer()
+                if delta > 0 {
+                    Menu(label == nil ? "Mark as" : "Change") {
+                        ForEach(store.breakKinds, id: \.self) { kind in
+                            Button(kind) { Task { await store.markGap(from: earlier.t2, to: laterStart, as: kind) } }
+                        }
+                        if label != nil {
+                            Divider()
+                            Button("Clear") { Task { await store.markGap(from: earlier.t2, to: laterStart, as: nil) } }
+                        }
+                    }
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                    .help("Name the gap \(store.clock(earlier.t2))\u{2013}\(store.clock(laterStart)); it stays untracked")
+                }
                 Button(delta > 0 ? "Fill" : "Trim") { Task { await store.setEnd(earlier, to: laterStart) } }
                     .buttonStyle(.borderless)
                     .help(delta > 0 ? "Extend \u{201C}\(earlier.title)\u{201D} to \(store.clock(laterStart))" : "End \u{201C}\(earlier.title)\u{201D} at \(store.clock(laterStart))")

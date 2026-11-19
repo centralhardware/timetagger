@@ -8,6 +8,7 @@ import timetagger.db.Database
 import timetagger.db.RecordFilter
 import timetagger.db.RecordRepository
 import timetagger.model.Record
+import timetagger.model.RecordKind
 import timetagger.model.RecordInput
 import timetagger.model.Tags
 import timetagger.model.Tickets
@@ -43,8 +44,10 @@ class RecordService(private val db: Database, private val records: RecordReposit
 
     private fun create(session: Session, userId: Long, input: RecordInput): Record {
         val tags = validate(input)
+        val kind = input.kind ?: RecordKind.WORK
+        if (kind == RecordKind.GAP && input.stop == null) throw Invalid("a gap must have a stop")
         if (input.stop == null && !input.deleted) stopRunning(session, userId, input.start)
-        return records.create(session, userId, input.start, input.stop, input.description.trim(), ticket(input), tags, Instant.now().takeIf { input.deleted })
+        return records.create(session, userId, input.start, input.stop, input.description.trim(), ticket(input), tags, Instant.now().takeIf { input.deleted }, kind)
     }
 
     /** Only one record runs at a time: starting one stops whatever was running, when the new one starts. */
@@ -59,7 +62,8 @@ class RecordService(private val db: Database, private val records: RecordReposit
         val cur = records.get(session, userId, id) ?: throw NotFound("record $id")
         if (input.revision != null && input.revision != cur.revision) throw Conflict(cur)
         val deletedAt = if (input.deleted) cur.deletedAt ?: Instant.now() else null
-        return records.update(session, userId, id, input.start, input.stop, input.description.trim(), ticket(input), tags, deletedAt)
+        if ((input.kind ?: cur.kind) == RecordKind.GAP && input.stop == null) throw Invalid("a gap must have a stop")
+        return records.update(session, userId, id, input.start, input.stop, input.description.trim(), ticket(input), tags, deletedAt, input.kind)
     }
 
     /** Returns the normalized tags. */
