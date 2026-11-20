@@ -756,7 +756,7 @@ struct SettingsView: View {
                         ForEach(TimeZone.knownTimeZoneIdentifiers, id: \.self) { Text($0).tag($0) }
                     }
                     Toggle("Show work time next to local time", isOn: $store.showWorkTime)
-                    Toggle("Pause the running task while the Mac sleeps", isOn: $store.pauseOnSleep)
+                    Toggle("Pause the running task while the lid is closed", isOn: $store.pauseOnSleep)
                 }
                 Section("General") {
                     Toggle("Open at login", isOn: $openAtLogin)

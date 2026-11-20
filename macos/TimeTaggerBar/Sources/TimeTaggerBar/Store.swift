@@ -1,3 +1,4 @@
+import IOKit
 import Foundation
 import SwiftUI
 import UserNotifications
@@ -139,8 +140,9 @@ final class Store: ObservableObject {
 
     /// Closing the lid stops the running record at that moment; the network may
     /// already be gone, so didWake() repeats the stop before resuming.
+    /// Idle sleep with the lid open (or a desktop Mac) leaves the timer running.
     private func willSleep() {
-        guard pauseOnSleep, !running.isEmpty else { return }
+        guard pauseOnSleep, !running.isEmpty, Self.lidClosed else { return }
         paused = running
         sleptAt = Int(Date().timeIntervalSince1970)
         let stopped = stoppedCopies(paused, at: sleptAt)
@@ -157,6 +159,16 @@ final class Store: ObservableObject {
         let t = Int(Date().timeIntervalSince1970)
         let resumed = toResume.map { Record(key: Record.newKey(), rev: 0, t1: t, t2: t, ds: $0.ds, tags: $0.tags, deleted: 0) }
         await save(stoppedCopies(toResume, at: sleptAt) + resumed)
+    }
+
+    /// Whether the built-in display's lid is shut, from IOPMrootDomain's AppleClamshellState;
+    /// false on Macs without a lid.
+    static var lidClosed: Bool {
+        let root = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPMrootDomain"))
+        guard root != 0 else { return false }
+        defer { IOObjectRelease(root) }
+        let v = IORegistryEntryCreateCFProperty(root, "AppleClamshellState" as CFString, kCFAllocatorDefault, 0)
+        return (v?.takeRetainedValue() as? Bool) ?? false
     }
 
     private func stoppedCopies(_ recs: [Record], at t: Int) -> [Record] {
