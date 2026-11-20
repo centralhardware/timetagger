@@ -1326,13 +1326,20 @@ struct RunningText: View {
                 .font(.title3.weight(.semibold))
                 .lineLimit(1...3)
                 .focused($focused)
-                .onSubmit(save)
+                // Return ends the edit: dropping focus saves via onChange(of: focused).
+                .onSubmit(endEditing)
                 .onAppear { text = record.textWithTags }
                 .onChange(of: record.textWithTags) { t in if !focused { text = t } }
                 .onChange(of: focused) { f in if !f { save() } }
                 .help("Edit the running task; Return saves")
             if focused { HashSuggestions(text: $text, tags: store.tags) }
         }
+    }
+
+    private func endEditing() {
+        focused = false
+        // SwiftUI alone doesn't always resign the field in the popover; clear it explicitly.
+        NSApp.keyWindow?.makeFirstResponder(nil)
     }
 
     private func save() {
