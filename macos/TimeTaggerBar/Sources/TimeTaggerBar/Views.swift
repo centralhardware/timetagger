@@ -123,17 +123,19 @@ struct MenuView: View {
         }
     }
 
-    /// Today first, older days below, loading further back as the end scrolls into view.
+    /// Past days, newest first, loading further back as the end scrolls into view.
+    /// Today isn't repeated here: the left column already shows it in detail.
     /// Within a day, rows run strictly by time; back-to-back sessions of one task fold into one row.
     private var daySection: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                if feed.reachedEnd && feed.records.isEmpty {
-                    Text("No history yet. Start a task on the left and it shows up here.")
+                let days = feed.days().filter { !store.workCalendar.isDateInToday($0.id) }
+                if feed.reachedEnd && days.isEmpty {
+                    Text("No earlier days yet.")
                         .font(.callout).foregroundStyle(.tertiary).padding(16)
                 }
-                ForEach(feed.days()) { day in
-                    let detailed = store.workCalendar.isDateInToday(day.id) || expandedDays.contains(day.id)
+                ForEach(days) { day in
+                    let detailed = expandedDays.contains(day.id)
                     Section {
                         if detailed {
                             let groups = TaskGroup.group(day.records)
@@ -174,12 +176,10 @@ struct MenuView: View {
                         }
                     } header: {
                         HStack(spacing: 6) {
-                            if !store.workCalendar.isDateInToday(day.id) {
-                                Image(systemName: "chevron.right")
-                                    .font(.caption2.weight(.semibold))
-                                    .rotationEffect(.degrees(detailed ? 90 : 0))
-                            }
-                            Text(store.workCalendar.isDateInToday(day.id) ? "Today" : day.id.formatted(Date.FormatStyle(timeZone: store.workTimeZone).weekday(.abbreviated).day().month(.abbreviated)))
+                            Image(systemName: "chevron.right")
+                                .font(.caption2.weight(.semibold))
+                                .rotationEffect(.degrees(detailed ? 90 : 0))
+                            Text(day.id.formatted(Date.FormatStyle(timeZone: store.workTimeZone).weekday(.abbreviated).day().month(.abbreviated)))
                             Spacer()
                             Text(Store.format(day.records.reduce(0) { $0 + $1.duration(now: store.now) }, seconds: false))
                                 .monospacedDigit()
@@ -190,10 +190,9 @@ struct MenuView: View {
                         .padding(.top, 10)
                         .frame(height: 34)
                         // No band of its own: a quiet label on the popover's own background.
-                        .overlay(alignment: .top) { Divider().opacity(day.id == feed.days().first?.id ? 0 : 1) }
+                        .overlay(alignment: .top) { Divider().opacity(day.id == days.first?.id ? 0 : 1) }
                         .contentShape(Rectangle())
                         .onTapGesture {
-                            guard !store.workCalendar.isDateInToday(day.id) else { return }
                             withAnimation(.easeOut(duration: 0.15)) {
                                 if expandedDays.contains(day.id) { expandedDays.remove(day.id) } else { expandedDays.insert(day.id) }
                             }
