@@ -1,0 +1,51 @@
+package timetagger
+
+import io.ktor.server.application.Application
+import io.ktor.server.plugins.di.dependencies
+import timetagger.auth.AccessTokens
+import timetagger.auth.AuthService
+import timetagger.auth.PasswordService
+import timetagger.config.Config
+import timetagger.db.ApiKeyRepository
+import timetagger.db.Database
+import timetagger.db.RecordRepository
+import timetagger.db.RefreshTokenRepository
+import timetagger.db.SettingRepository
+import timetagger.db.UserRepository
+import timetagger.db.WorkspaceRepository
+import timetagger.service.MergeService
+import timetagger.service.RecordService
+import timetagger.service.SettingService
+import timetagger.service.SyncService
+import timetagger.service.WorkspaceService
+import java.time.Duration
+
+/**
+ * Registers every component with Ktor's DI container; routes and plugins resolve what they need.
+ * [config] and [db] are owned by the caller (main or a test), so the container never closes them.
+ */
+fun Application.registerDependencies(config: Config, db: Database) {
+    dependencies {
+        provide { config }
+        provide { db }.cleanup { }
+
+        provide { UserRepository() }
+        provide { RecordRepository() }
+        provide { SettingRepository() }
+        provide { WorkspaceRepository() }
+        provide { RefreshTokenRepository() }
+        provide { ApiKeyRepository() }
+
+        provide { AccessTokens(resolve<Config>().jwtKey) }
+        provide { PasswordService(resolve(), resolve(), resolve()) }
+        provide { AuthService(resolve(), resolve(), resolve(), resolve(), resolve(), resolve()) }
+        provide { RecordService(resolve(), resolve(), resolve()) }
+        provide { WorkspaceService(resolve(), resolve()) }
+        provide { SettingService(resolve(), resolve()) }
+        provide { SyncService(resolve(), resolve(), resolve(), resolve()) }
+        provide {
+            val c = resolve<Config>()
+            MergeService(resolve(), resolve(), Duration.ofSeconds(c.mergeGapSeconds), c.mergeIgnoreTag.lowercase().ifBlank { null })
+        }
+    }
+}

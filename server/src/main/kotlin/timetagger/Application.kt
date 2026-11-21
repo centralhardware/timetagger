@@ -26,20 +26,12 @@ import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import org.slf4j.LoggerFactory
 import kotlin.coroutines.cancellation.CancellationException
-import timetagger.auth.AccessTokens
 import timetagger.auth.AuthService
-import timetagger.auth.PasswordService
-import timetagger.db.ApiKeyRepository
-import timetagger.db.RefreshTokenRepository
 import timetagger.routes.accountRoutes
 import timetagger.routes.authRoutes
 import io.ktor.server.auth.bearer
 import timetagger.config.Config
 import timetagger.db.Database
-import timetagger.db.RecordRepository
-import timetagger.db.SettingRepository
-import timetagger.db.WorkspaceRepository
-import timetagger.db.UserRepository
 import timetagger.model.ApiJson
 import timetagger.model.ErrorResponse
 import timetagger.model.VersionResponse
@@ -52,26 +44,12 @@ import timetagger.service.SettingService
 import timetagger.service.WorkspaceService
 import timetagger.service.SyncService
 import timetagger.service.MergeService
-import java.time.Duration
+import io.ktor.server.plugins.di.dependencies
+import io.ktor.server.routing.application
 
 private val log = LoggerFactory.getLogger("timetagger.api")
 
 private const val BEARER = "bearer"
-
-/** Everything the routes need, wired once per application. */
-class Services(db: Database, config: Config) {
-    private val users = UserRepository()
-    private val recordRepo = RecordRepository()
-    private val settingRepo = SettingRepository()
-    private val workspaceRepo = WorkspaceRepository()
-    val passwords = PasswordService(db, users)
-    val auth = AuthService(db, users, passwords, AccessTokens(config.jwtKey), RefreshTokenRepository(), ApiKeyRepository())
-    val records = RecordService(db, recordRepo, workspaceRepo)
-    val workspaces = WorkspaceService(db, workspaceRepo)
-    val settings = SettingService(db, settingRepo)
-    val sync = SyncService(db, recordRepo, settingRepo, workspaceRepo)
-    val merge = MergeService(db, recordRepo, Duration.ofSeconds(config.mergeGapSeconds), config.mergeIgnoreTag.lowercase().ifBlank { null })
-}
 
 fun version(): String = Database.resource("version.txt").trim()
 
@@ -79,8 +57,12 @@ private suspend fun ApplicationCall.error(status: HttpStatusCode, code: String, 
     respond(status, ErrorResponse(code, message))
 
 fun Application.module(config: Config, db: Database) {
-    val services = Services(db, config)
-    if (config.autoMerge) services.merge.start(this)
+    registerDependencies(config, db)
+    val auth: AuthService by dependencies
+    if (config.autoMerge) {
+        val merge: MergeService by dependencies
+        merge.start(this)
+    }
 
     install(ContentNegotiation) { json(ApiJson) }
     install(SSE)
@@ -96,7 +78,7 @@ fun Application.module(config: Config, db: Database) {
     }
     install(Authentication) {
         bearer(BEARER) {
-            authenticate { services.auth.authenticate(it.token) }
+            authenticate { auth.authenticate(it.token) }
         }
     }
     install(StatusPages) {
@@ -127,21 +109,26 @@ fun Application.module(config: Config, db: Database) {
 
     routing {
         // At the root, so the bare domain is the base URL, and under the prefix for clients set up with it.
-        for (prefix in setOf("/", config.pathPrefix)) route(prefix) { api(services) }
+        for (prefix in setOf("/", config.pathPrefix)) route(prefix) { api() }
     }
 }
 
-private fun Route.api(services: Services) {
+private fun Route.api() {
+    val auth: AuthService by application.dependencies
+    val records: RecordService by application.dependencies
+    val settings: SettingService by application.dependencies
+    val workspaces: WorkspaceService by application.dependencies
+    val sync: SyncService by application.dependencies
     get("status") { call.respondText("ok") }
     route("api/v1") {
         get("version") { call.respond(VersionResponse(version())) }
-        authRoutes(services.auth)
+        authRoutes(auth)
         authenticate(BEARER) {
-            accountRoutes(services.auth)
-            recordRoutes(services.records)
-            settingRoutes(services.settings)
-            workspaceRoutes(services.workspaces)
-            syncRoutes(services.sync)
+            accountRoutes(auth)
+            recordRoutes(records)
+            settingRoutes(settings)
+            workspaceRoutes(workspaces)
+            syncRoutes(sync)
         }
     }
 }
