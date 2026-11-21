@@ -10,5 +10,14 @@ A small native macOS menu bar client for TimeTagger (macOS 13+).
 - closing the lid (sleep) stops the running task; opening it resumes it as a new record (toggle in Settings)
 - sign in with server, username and password (like the web login); the app keeps only the resulting API token, in the Keychain
 
+Install:
+
+```sh
+brew tap centralhardware/timetagger https://github.com/centralhardware/timetagger
+brew install --cask timetaggerbar
+```
+
+Release: push a `macos-vX.Y.Z` tag — CI builds the dmg, publishes the release and opens a PR bumping `Casks/timetaggerbar.rb`.
+
 Build: `brew install create-dmg && ./build-app.sh` → `build/TimeTaggerBar.dmg` (ad-hoc signed; first launch: right-click → Open).
 CI builds the same DMG as an artifact of the `macOS app` workflow.

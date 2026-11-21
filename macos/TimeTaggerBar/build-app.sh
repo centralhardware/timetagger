@@ -2,6 +2,7 @@
 # Builds TimeTaggerBar.app (a menu-bar-only app) into ./build.
 set -e
 cd "$(dirname "$0")"
+VERSION=${VERSION:-0.8.2}
 swift build -c release --arch arm64
 BIN=$(swift build -c release --arch arm64 --show-bin-path)/TimeTaggerBar
 APP=build/TimeTaggerBar.app
@@ -25,8 +26,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleExecutable</key><string>TimeTaggerBar</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
-  <key>CFBundleShortVersionString</key><string>0.8.2</string>
-  <key>CFBundleVersion</key><string>0.8.2</string>
+  <key>CFBundleShortVersionString</key><string>$VERSION</string>
+  <key>CFBundleVersion</key><string>$VERSION</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>LSUIElement</key><true/>
 </dict></plist>
