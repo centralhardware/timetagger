@@ -14,14 +14,15 @@ import timetagger.db.SettingRepository
 import timetagger.db.UserRepository
 import timetagger.db.WorkspaceRepository
 import timetagger.service.MergeService
+import timetagger.service.MergeSettings
 import timetagger.service.RecordService
 import timetagger.service.SettingService
 import timetagger.service.SyncService
 import timetagger.service.WorkspaceService
-import java.time.Duration
 
 /**
- * Registers every component with Ktor's DI container; routes and plugins resolve what they need.
+ * Registers every component with Ktor's DI container; routes and plugins resolve what they need,
+ * and each class gets its own dependencies by constructor type.
  * [config] and [db] are owned by the caller (main or a test), so the container never closes them.
  */
 fun Application.registerDependencies(config: Config, db: Database) {
@@ -29,23 +30,23 @@ fun Application.registerDependencies(config: Config, db: Database) {
         provide { config }
         provide { db }.cleanup { }
 
-        provide { UserRepository() }
-        provide { RecordRepository() }
-        provide { SettingRepository() }
-        provide { WorkspaceRepository() }
-        provide { RefreshTokenRepository() }
-        provide { ApiKeyRepository() }
+        provide(::UserRepository)
+        provide(::RecordRepository)
+        provide(::SettingRepository)
+        provide(::WorkspaceRepository)
+        provide(::RefreshTokenRepository)
+        provide(::ApiKeyRepository)
 
+        // Plain values read from the config; everything below is built by constructor injection.
         provide { AccessTokens(resolve<Config>().jwtKey) }
-        provide { PasswordService(resolve(), resolve(), resolve()) }
-        provide { AuthService(resolve(), resolve(), resolve(), resolve(), resolve(), resolve()) }
-        provide { RecordService(resolve(), resolve(), resolve()) }
-        provide { WorkspaceService(resolve(), resolve()) }
-        provide { SettingService(resolve(), resolve()) }
-        provide { SyncService(resolve(), resolve(), resolve(), resolve()) }
-        provide {
-            val c = resolve<Config>()
-            MergeService(resolve(), resolve(), Duration.ofSeconds(c.mergeGapSeconds), c.mergeIgnoreTag.lowercase().ifBlank { null })
-        }
+        provide { MergeSettings.from(resolve<Config>()) }
+
+        provide(::PasswordService)
+        provide(::AuthService)
+        provide(::RecordService)
+        provide(::WorkspaceService)
+        provide(::SettingService)
+        provide(::SyncService)
+        provide(::MergeService)
     }
 }

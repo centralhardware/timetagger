@@ -4,6 +4,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import org.slf4j.LoggerFactory
+import timetagger.config.Config
 import timetagger.db.Database
 import timetagger.db.RecordFilter
 import timetagger.db.RecordRepository
@@ -12,6 +13,13 @@ import java.time.Duration
 import java.time.Instant
 
 private val log = LoggerFactory.getLogger("timetagger.merge")
+
+/** How close two records must be to merge, and the day-end marker set aside when comparing tags. */
+data class MergeSettings(val gap: Duration = Duration.ofSeconds(60), val ignoreTag: String? = "finished") {
+    companion object {
+        fun from(config: Config) = MergeSettings(Duration.ofSeconds(config.mergeGapSeconds), config.mergeIgnoreTag.lowercase().ifBlank { null })
+    }
+}
 
 /** A run of records that collapses into its first one. */
 data class Chain(val records: List<Record>)
@@ -30,11 +38,13 @@ data class Chain(val records: List<Record>)
 class MergeService(
     private val db: Database,
     private val records: RecordRepository,
-    private val gap: Duration = Duration.ofSeconds(60),
-    private val ignoreTag: String? = "finished",
+    settings: MergeSettings = MergeSettings(),
     /** How far back a write looks: two days covers a shift that ran past midnight. */
     private val window: Duration = Duration.ofDays(2),
 ) {
+    private val gap = settings.gap
+    private val ignoreTag = settings.ignoreTag
+
     /** Merges after every committed write, for as long as [scope] lives. */
     fun start(scope: CoroutineScope): Job = scope.launch {
         db.writes.collect { userId ->
