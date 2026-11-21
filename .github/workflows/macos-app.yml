@@ -4,10 +4,15 @@ on:
   # Pushes to main only: a PR branch is already built by the pull_request trigger.
   push:
     branches: [ main ]
+    tags: [ 'macos-v*' ]
     paths: ["macos/**", ".github/workflows/macos-app.yml"]
   pull_request:
     paths: ["macos/**", ".github/workflows/macos-app.yml"]
   workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
 
 jobs:
   build:
@@ -15,6 +20,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: brew install create-dmg
+      - name: Version from tag
+        if: startsWith(github.ref, 'refs/tags/macos-v')
+        run: echo "VERSION=${GITHUB_REF_NAME#macos-v}" >> "$GITHUB_ENV"
       - run: ./macos/TimeTaggerBar/build-app.sh
         env:
           MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
@@ -23,3 +31,23 @@ jobs:
         with:
           name: TimeTaggerBar
           path: macos/TimeTaggerBar/build/TimeTaggerBar.dmg
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/macos-v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          DMG="TimeTaggerBar-$VERSION.dmg"
+          cp macos/TimeTaggerBar/build/TimeTaggerBar.dmg "$DMG"
+          gh release create "$GITHUB_REF_NAME" "$DMG" --title "TimeTaggerBar $VERSION" --generate-notes
+      # main is protected, so the cask bump goes through a PR.
+      - name: Bump Homebrew cask
+        if: startsWith(github.ref, 'refs/tags/macos-v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SHA=$(shasum -a 256 "TimeTaggerBar-$VERSION.dmg" | cut -d' ' -f1)
+          git fetch origin main && git checkout -B "cask-$VERSION" origin/main
+          sed -i '' -e "s/^  version \".*\"/  version \"$VERSION\"/" -e "s/^  sha256 \".*\"/  sha256 \"$SHA\"/" Casks/timetaggerbar.rb
+          git -c user.name=github-actions -c user.email=github-actions@users.noreply.github.com commit -am "Cask: timetaggerbar $VERSION"
+          git push -f origin "cask-$VERSION"
+          gh pr create --base main --head "cask-$VERSION" --title "Cask: timetaggerbar $VERSION" --body "Bumps the Homebrew cask to the $GITHUB_REF_NAME release."
