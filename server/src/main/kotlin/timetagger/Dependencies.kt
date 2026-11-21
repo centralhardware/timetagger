@@ -2,6 +2,7 @@ package timetagger
 
 import io.ktor.server.application.Application
 import io.ktor.server.plugins.di.dependencies
+import io.ktor.server.plugins.di.provide
 import timetagger.auth.AccessTokens
 import timetagger.auth.AuthService
 import timetagger.auth.PasswordService
@@ -30,23 +31,23 @@ fun Application.registerDependencies(config: Config, db: Database) {
         provide { config }
         provide { db }.cleanup { }
 
-        provide<UserRepository>(::UserRepository)
-        provide<RecordRepository>(::RecordRepository)
-        provide<SettingRepository>(::SettingRepository)
-        provide<WorkspaceRepository>(::WorkspaceRepository)
-        provide<RefreshTokenRepository>(::RefreshTokenRepository)
-        provide<ApiKeyRepository>(::ApiKeyRepository)
+        provide(::UserRepository)
+        provide(::RecordRepository)
+        provide(::SettingRepository)
+        provide(::WorkspaceRepository)
+        provide(::RefreshTokenRepository)
+        provide(::ApiKeyRepository)
 
         // Plain values read from the config; everything below is built by constructor injection.
         provide { AccessTokens(resolve<Config>().jwtKey) }
         provide { MergeSettings.from(resolve<Config>()) }
 
-        provide<PasswordService>(::PasswordService)
-        provide<AuthService>(::AuthService)
-        provide<RecordService>(::RecordService)
-        provide<WorkspaceService>(::WorkspaceService)
-        provide<SettingService>(::SettingService)
-        provide<SyncService>(::SyncService)
-        provide<MergeService>(::MergeService)
+        provide(::PasswordService)
+        provide(::AuthService)
+        provide(::RecordService)
+        provide(::WorkspaceService)
+        provide(::SettingService)
+        provide(::SyncService)
+        provide(::MergeService)
     }
 }
