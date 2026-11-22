@@ -143,6 +143,9 @@ fun Route.usageRoutes(usage: UsageService) = route("usage") {
         call.respond(UsageList(usage.find(call.auth.userId, from, to)))
     }
     get("summary") {
+        val q = call.request.queryParameters
+        q["record"]?.let { return@get call.respond(usage.forRecord(call.auth.userId, it)) }
+        q["ticket"]?.let { return@get call.respond(usage.forTicket(call.auth.userId, it)) }
         val from = call.instantParam("from") ?: throw Invalid("from is required")
         val to = call.instantParam("to") ?: throw Invalid("to is required")
         call.respond(usage.summary(call.auth.userId, from, to))

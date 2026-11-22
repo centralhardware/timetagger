@@ -74,8 +74,8 @@ class Services(db: Database, config: Config, usageRepo: UsageRepository? = null)
     val records = RecordService(db, recordRepo, workspaceRepo)
     val workspaces = WorkspaceService(db, workspaceRepo)
     val settings = SettingService(db, settingRepo)
-    val usage = UsageService(usageRepo)
     val sync = SyncService(db, recordRepo, settingRepo, workspaceRepo)
+    val usage = UsageService(usageRepo, records)
     val merge = MergeService(db, recordRepo, Duration.ofSeconds(config.mergeGapSeconds), config.mergeIgnoreTag.lowercase().ifBlank { null })
 }
 

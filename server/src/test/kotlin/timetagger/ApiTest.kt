@@ -374,6 +374,12 @@ class ApiTest {
             setBody("""{"blocks":[{"device":"mac","bundleId":"x","appName":"X","start":"2026-11-22T10:05:00Z","stop":"2026-11-22T10:00:00Z"}]}""")
         }
         assertEquals(HttpStatusCode.UnprocessableEntity, bad.status)
+        val badKind = client.post("$API/usage") {
+            header("Authorization", "Bearer $t"); contentType(ContentType.Application.Json)
+            setBody("""{"blocks":[{"device":"mac","bundleId":"x","appName":"X","kind":"other","start":"2026-11-22T10:00:00Z","stop":"2026-11-22T10:05:00Z"}]}""")
+        }
+        assertEquals(HttpStatusCode.UnprocessableEntity, badKind.status)
+        assertEquals(HttpStatusCode.ServiceUnavailable, client.get("$API/usage/summary?ticket=SM-1") { header("Authorization", "Bearer $t") }.status)
     }
 }
 

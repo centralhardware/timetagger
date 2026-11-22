@@ -768,7 +768,7 @@ struct SettingsView: View {
                     Toggle("Record which app is in front", isOn: $recordUsage)
                         .disabled(!store.signedIn)
                         .onChange(of: recordUsage) { on in setRecordUsage(on) }
-                    Text("A background helper keeps recording while this app is closed and sends the time per app to the server.")
+                    Text("A background helper keeps recording while this app is closed: the app in front and its window title, time away, and pickups. Window titles need Accessibility for TimeTaggerUsage in System Settings → Privacy & Security.")
                         .font(.caption).foregroundStyle(.secondary)
                     if UsageAgent.service.status == .requiresApproval {
                         Button("Allow in Login Items…") { SMAppService.openSystemSettingsLoginItems() }
