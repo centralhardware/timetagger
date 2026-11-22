@@ -8,7 +8,6 @@ A small native macOS menu bar client for TimeTagger (macOS 13+).
 - History window: records by day with day totals, date range, search, add/edit/delete/resume
 - Report window: report options, an editable table preview (edit cells, remove/add rows) and Copy table (TSV + HTML for spreadsheets)
 - closing the lid (sleep) stops the running task; opening it resumes it as a new record (toggle in Settings)
-- app usage (Settings → General): a background LaunchAgent records the app in front and its window title (with Accessibility), time away (idle 5 min / locked / asleep) and pickups, and sends the blocks to the server, which keeps them in ClickHouse; it runs whether or not the menu bar app is open
 - sign in with server, username and password (like the web login); the app keeps only the resulting API token, in the Keychain
 
 Install:
