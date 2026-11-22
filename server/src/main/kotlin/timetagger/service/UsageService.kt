@@ -58,6 +58,7 @@ class UsageService(private val usage: UsageRepository?, private val records: Rec
 
     /** What was in front while one TimeTagger record ran (a running record: until now). */
     suspend fun forRecord(userId: Long, id: String): UsageSummary {
+        repo
         val r = records.get(userId, id)
         val stop = r.stop ?: Instant.now()
         return summarize(userId, listOf(r.start to stop), r.start, stop).copy(record = r.id)
@@ -65,6 +66,7 @@ class UsageService(private val usage: UsageRepository?, private val records: Rec
 
     /** What was in front during every record of a ticket, all time. */
     suspend fun forTicket(userId: Long, ticket: String): UsageSummary {
+        repo // 503 before looking anything up
         val key = ticket.trim().uppercase()
         if (key.isEmpty()) throw Invalid("ticket must not be empty")
         val recs = records.find(userId, RecordFilter(from = Instant.EPOCH, to = Instant.parse("9999-12-31T00:00:00Z"), text = key))
