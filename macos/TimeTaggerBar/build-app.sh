@@ -32,7 +32,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSUIElement</key><true/>
 </dict></plist>
 PLIST
-# Sign with the same certificate every release when CI provides one. The keychain trusts the
+# Sign with the shared LocalCodeSign certificate (same key for all the Mac tools) when CI provides one. The keychain trusts the
 # app by its signature: an ad-hoc signature changes with every build, so macOS would ask for
 # keychain access again after each update, and the app sits frozen behind that prompt.
 if [ -n "$MACOS_CERT_P12" ]; then
@@ -48,7 +48,7 @@ if [ -n "$MACOS_CERT_P12" ]; then
   # codesign only looks in the search list. The cert is self-signed (not trusted), so name it by hash.
   OLD_KCS=$(security list-keychains -d user | tr -d '"')
   security list-keychains -d user -s "$KC" $OLD_KCS
-  HASH=$(security find-certificate -c "TimeTaggerBar Signing" -Z "$KC" | awk '/SHA-1/ {print $NF}')
+  HASH=$(security find-certificate -c "LocalCodeSign" -Z "$KC" | awk '/SHA-1/ {print $NF}')
   codesign --force --keychain "$KC" --sign "$HASH" "$APP"
   security list-keychains -d user -s $OLD_KCS
   security delete-keychain "$KC"
