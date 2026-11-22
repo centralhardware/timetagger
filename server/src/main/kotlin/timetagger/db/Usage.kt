@@ -23,27 +23,8 @@ data class UsageRow(val kind: String, val bundleId: String, val appName: String,
  * (user, device, start) identifies a block and the row with the latest stop wins on merge,
  * so every read uses FINAL.
  */
+/** The table comes from the ClickHouse migrations ([ClickHouseMigrations]). */
 class UsageRepository(private val ch: ClickHouse) {
-    suspend fun migrate() {
-        ch.execute(
-            """
-            CREATE TABLE IF NOT EXISTS app_usage (
-                user_id   UInt64,
-                device    LowCardinality(String),
-                kind      LowCardinality(String),
-                bundle_id LowCardinality(String),
-                app_name  LowCardinality(String),
-                title     String,
-                start_at  DateTime64(3, 'UTC'),
-                stop_at   DateTime64(3, 'UTC')
-            )
-            ENGINE = ReplacingMergeTree(stop_at)
-            PARTITION BY toYYYYMM(start_at)
-            ORDER BY (user_id, device, start_at)
-            """.trimIndent(),
-        )
-    }
-
     suspend fun insert(userId: Long, blocks: List<Triple<UsageBlock, Instant, Instant>>) =
         ch.insert(
             "app_usage",

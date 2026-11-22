@@ -50,6 +50,7 @@ import timetagger.routes.syncRoutes
 import timetagger.routes.usageRoutes
 import timetagger.service.UsageService
 import timetagger.db.ClickHouse
+import timetagger.db.ClickHouseMigrations
 import kotlinx.coroutines.launch
 import timetagger.db.UsageRepository
 import timetagger.service.RecordService
@@ -85,11 +86,12 @@ private suspend fun ApplicationCall.error(status: HttpStatusCode, code: String, 
     respond(status, ErrorResponse(code, message))
 
 fun Application.module(config: Config, db: Database) {
-    val usageRepo = config.clickhouseUri.takeIf { it.isNotBlank() }?.let { UsageRepository(ClickHouse(it)) }
-    // The table is created in the background so a ClickHouse outage never keeps the API from starting.
-    usageRepo?.let { repo ->
+    val clickhouse = config.clickhouseUri.takeIf { it.isNotBlank() }?.let { ClickHouse(it) }
+    val usageRepo = clickhouse?.let { UsageRepository(it) }
+    // Migrated in the background so a ClickHouse outage never keeps the API from starting.
+    clickhouse?.let { ch ->
         launch {
-            try { repo.migrate() } catch (e: Exception) { log.error("ClickHouse app_usage migration failed", e) }
+            try { ClickHouseMigrations(ch).migrate() } catch (e: Exception) { log.error("ClickHouse migrations failed", e) }
         }
     }
     val services = Services(db, config, usageRepo)

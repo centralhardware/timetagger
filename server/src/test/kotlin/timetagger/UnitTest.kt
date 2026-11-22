@@ -6,6 +6,7 @@ import timetagger.model.Tags
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class UnitTest {
     @Test
@@ -30,5 +31,12 @@ class UnitTest {
         assertEquals(listOf("call", "core-2517"), Tags.normalize(listOf("#call", " Core-2517", "call", "")))
         assertNull(Tags.normalize(listOf("two words")))
         assertNull(Tags.normalize(listOf("a,b")))
+    }
+
+    @Test
+    fun clickHouseMigrationsAreNumberedAndParse() {
+        val ms = timetagger.db.ClickHouseMigrations.available()
+        assertEquals((1..ms.size).toList(), ms.map { it.version })
+        ms.forEach { assertTrue(it.sql.isNotBlank() && !it.sql.contains(";"), "one statement in V${it.version}") }
     }
 }
