@@ -358,29 +358,6 @@ class ApiTest {
         assertEquals("2", stale.obj()["value"]!!.jsonPrimitive.content)
         assertEquals(HttpStatusCode.NotFound, client.get("$API/settings/none") { header("Authorization", "Bearer $t") }.status)
     }
-
-    @Test
-    fun usageNeedsClickHouse() = api {
-        val t = token()
-        val r = client.post("$API/usage") {
-            header("Authorization", "Bearer $t"); contentType(ContentType.Application.Json)
-            setBody("""{"blocks":[{"device":"mac","bundleId":"com.apple.Safari","appName":"Safari","start":"2026-11-22T10:00:00Z","stop":"2026-11-22T10:05:00Z"}]}""")
-        }
-        assertEquals(HttpStatusCode.ServiceUnavailable, r.status)
-        assertEquals("usage_disabled", r.obj()["error"]!!.jsonPrimitive.content)
-        // A bad block is refused before storage is touched.
-        val bad = client.post("$API/usage") {
-            header("Authorization", "Bearer $t"); contentType(ContentType.Application.Json)
-            setBody("""{"blocks":[{"device":"mac","bundleId":"x","appName":"X","start":"2026-11-22T10:05:00Z","stop":"2026-11-22T10:00:00Z"}]}""")
-        }
-        assertEquals(HttpStatusCode.UnprocessableEntity, bad.status)
-        val badKind = client.post("$API/usage") {
-            header("Authorization", "Bearer $t"); contentType(ContentType.Application.Json)
-            setBody("""{"blocks":[{"device":"mac","bundleId":"x","appName":"X","kind":"other","start":"2026-11-22T10:00:00Z","stop":"2026-11-22T10:05:00Z"}]}""")
-        }
-        assertEquals(HttpStatusCode.UnprocessableEntity, badKind.status)
-        assertEquals(HttpStatusCode.ServiceUnavailable, client.get("$API/usage/summary?ticket=SM-1") { header("Authorization", "Bearer $t") }.status)
-    }
 }
 
 /** V5 converts a database written by the v2 server. */

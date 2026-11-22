@@ -47,11 +47,6 @@ import timetagger.routes.recordRoutes
 import timetagger.routes.settingRoutes
 import timetagger.routes.workspaceRoutes
 import timetagger.routes.syncRoutes
-import timetagger.routes.usageRoutes
-import timetagger.service.UsageService
-import timetagger.db.ClickHouse
-import kotlinx.coroutines.launch
-import timetagger.db.UsageRepository
 import timetagger.service.RecordService
 import timetagger.service.SettingService
 import timetagger.service.WorkspaceService
@@ -64,7 +59,7 @@ private val log = LoggerFactory.getLogger("timetagger.api")
 private const val BEARER = "bearer"
 
 /** Everything the routes need, wired once per application. */
-class Services(db: Database, config: Config, usageRepo: UsageRepository? = null) {
+class Services(db: Database, config: Config) {
     private val users = UserRepository()
     private val recordRepo = RecordRepository()
     private val settingRepo = SettingRepository()
@@ -75,7 +70,6 @@ class Services(db: Database, config: Config, usageRepo: UsageRepository? = null)
     val workspaces = WorkspaceService(db, workspaceRepo)
     val settings = SettingService(db, settingRepo)
     val sync = SyncService(db, recordRepo, settingRepo, workspaceRepo)
-    val usage = UsageService(usageRepo, records)
     val merge = MergeService(db, recordRepo, Duration.ofSeconds(config.mergeGapSeconds), config.mergeIgnoreTag.lowercase().ifBlank { null })
 }
 
@@ -85,14 +79,7 @@ private suspend fun ApplicationCall.error(status: HttpStatusCode, code: String, 
     respond(status, ErrorResponse(code, message))
 
 fun Application.module(config: Config, db: Database) {
-    val usageRepo = config.clickhouseUri.takeIf { it.isNotBlank() }?.let { UsageRepository(ClickHouse(it)) }
-    // The table is created in the background so a ClickHouse outage never keeps the API from starting.
-    usageRepo?.let { repo ->
-        launch {
-            try { repo.migrate() } catch (e: Exception) { log.error("ClickHouse app_usage migration failed", e) }
-        }
-    }
-    val services = Services(db, config, usageRepo)
+    val services = Services(db, config)
     if (config.autoMerge) services.merge.start(this)
 
     install(ContentNegotiation) { json(ApiJson) }
@@ -155,7 +142,6 @@ private fun Route.api(services: Services) {
             settingRoutes(services.settings)
             workspaceRoutes(services.workspaces)
             syncRoutes(services.sync)
-            usageRoutes(services.usage)
         }
     }
 }

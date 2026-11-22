@@ -27,14 +27,11 @@ import timetagger.model.RecordList
 import timetagger.model.SettingInput
 import timetagger.model.SettingList
 import timetagger.model.TagList
-import timetagger.model.UsageBatch
-import timetagger.model.UsageList
 import timetagger.model.WorkspaceInput
 import timetagger.model.WorkspaceList
 import timetagger.service.RecordService
 import timetagger.service.SettingService
 import timetagger.service.SyncService
-import timetagger.service.UsageService
 import timetagger.service.WorkspaceService
 import java.time.Instant
 import kotlin.time.Duration.Companion.seconds
@@ -124,30 +121,5 @@ fun Route.syncRoutes(sync: SyncService) {
     get("changes") {
         val since = call.request.queryParameters["since"]?.let { it.toLongOrNull() ?: throw Invalid("since must be a revision number") } ?: 0
         call.respond(sync.changes(call.auth.userId, since))
-    }
-}
-
-/**
- * POST /usage {blocks: [...]}: Mac app usage; a client may re-send the block it is still in with a
- * later stop. GET /usage?from&to lists the blocks; GET /usage/summary?from&to adds them up per app,
- * clipped to the range. 503 when the server has no ClickHouse.
- */
-fun Route.usageRoutes(usage: UsageService) = route("usage") {
-    post {
-        usage.save(call.auth.userId, call.receive<UsageBatch>().blocks)
-        call.respond(HttpStatusCode.NoContent)
-    }
-    get {
-        val from = call.instantParam("from") ?: throw Invalid("from is required")
-        val to = call.instantParam("to") ?: throw Invalid("to is required")
-        call.respond(UsageList(usage.find(call.auth.userId, from, to)))
-    }
-    get("summary") {
-        val q = call.request.queryParameters
-        q["record"]?.let { return@get call.respond(usage.forRecord(call.auth.userId, it)) }
-        q["ticket"]?.let { return@get call.respond(usage.forTicket(call.auth.userId, it)) }
-        val from = call.instantParam("from") ?: throw Invalid("from is required")
-        val to = call.instantParam("to") ?: throw Invalid("to is required")
-        call.respond(usage.summary(call.auth.userId, from, to))
     }
 }
