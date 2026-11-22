@@ -4,10 +4,23 @@ set -e
 cd "$(dirname "$0")"
 VERSION=${VERSION:-0.8.2}
 swift build -c release --arch arm64
-BIN=$(swift build -c release --arch arm64 --show-bin-path)/TimeTaggerBar
+BINDIR=$(swift build -c release --arch arm64 --show-bin-path)
 APP=build/TimeTaggerBar.app
-rm -rf "$APP" && mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BIN" "$APP/Contents/MacOS/"
+rm -rf "$APP" && mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Library/LaunchAgents"
+cp "$BINDIR/TimeTaggerBar" "$BINDIR/TimeTaggerUsage" "$APP/Contents/MacOS/"
+# The app-usage helper, registered from Settings via SMAppService.agent(plistName:).
+cat > "$APP/Contents/Library/LaunchAgents/app.timetagger.usage.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>app.timetagger.usage</string>
+  <key>BundleProgram</key><string>Contents/MacOS/TimeTaggerUsage</string>
+  <key>AssociatedBundleIdentifiers</key><array><string>app.timetagger.bar</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ProcessType</key><string>Background</string>
+</dict></plist>
+PLIST
 
 # App icon: every size macOS asks for, from the 1024 px AppIcon.png.
 ICONSET=build/AppIcon.iconset
@@ -49,10 +62,12 @@ if [ -n "$MACOS_CERT_P12" ]; then
   OLD_KCS=$(security list-keychains -d user | tr -d '"')
   security list-keychains -d user -s "$KC" $OLD_KCS
   HASH=$(security find-certificate -c "LocalCodeSign" -Z "$KC" | awk '/SHA-1/ {print $NF}')
+  codesign --force --keychain "$KC" --sign "$HASH" --identifier app.timetagger.usage "$APP/Contents/MacOS/TimeTaggerUsage"
   codesign --force --keychain "$KC" --sign "$HASH" "$APP"
   security list-keychains -d user -s $OLD_KCS
   security delete-keychain "$KC"
 else
+  codesign --force --sign - --identifier app.timetagger.usage "$APP/Contents/MacOS/TimeTaggerUsage"
   codesign --force --sign - "$APP"
 fi
 

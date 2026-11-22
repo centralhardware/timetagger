@@ -694,6 +694,8 @@ enum SettingsSection: String, CaseIterable, Identifiable {
 struct SettingsView: View {
     @EnvironmentObject var store: Store
     @State private var openAtLogin = SMAppService.mainApp.status == .enabled
+    @State private var recordUsage = UsageAgent.enabled
+    @State private var usageError = ""
     @State private var loginError = ""
     @State private var url = ""
     @State private var username = ""
@@ -762,6 +764,17 @@ struct SettingsView: View {
                         .onChange(of: openAtLogin) { on in setOpenAtLogin(on) }
                     if !loginError.isEmpty { Text(loginError).font(.caption).foregroundStyle(.red) }
                 }
+                Section("App usage") {
+                    Toggle("Record which app is in front", isOn: $recordUsage)
+                        .disabled(!store.signedIn)
+                        .onChange(of: recordUsage) { on in setRecordUsage(on) }
+                    Text("A background helper keeps recording while this app is closed and sends the time per app to the server.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if UsageAgent.service.status == .requiresApproval {
+                        Button("Allow in Login Items…") { SMAppService.openSystemSettingsLoginItems() }
+                    }
+                    if !usageError.isEmpty { Text(usageError).font(.caption).foregroundStyle(.red) }
+                }
                 Section("Tickets") {
                     TextField("Prefixes", text: $store.ticketPrefixes, prompt: Text("ABC, XYZ"))
                     Text("Comma-separated project keys. Only these count as tickets; empty means any PREFIX-123.").font(.caption).foregroundStyle(.secondary)
@@ -806,6 +819,19 @@ struct SettingsView: View {
 
     private func pane(@ViewBuilder _ content: () -> some View) -> some View {
         Form { content() }.formStyle(.grouped)
+    }
+
+    private func setRecordUsage(_ on: Bool) {
+        guard on != UsageAgent.enabled else { return }
+        usageError = ""
+        Task {
+            do {
+                if on { try await UsageAgent.enable(api: store.api) } else { await UsageAgent.disable(api: store.api) }
+            } catch {
+                usageError = error.localizedDescription
+            }
+            recordUsage = UsageAgent.enabled
+        }
     }
 
     private func setOpenAtLogin(_ on: Bool) {

@@ -9,6 +9,8 @@ data class Config(
     val bind: String = "127.0.0.1:8080",
     /** PostgreSQL connection string, e.g. postgresql://user:pass@host:5432/timetagger. Required. */
     val dbUri: String = "",
+    /** ClickHouse HTTP URI for Mac app usage, e.g. http://user:pass@host:8123/timetagger. Empty turns usage off. */
+    val clickhouseUri: String = "",
     /** Secret for signing tokens. Empty means an ephemeral key: sessions end on restart. */
     val jwtKey: String = "",
     val logLevel: String = "info",
@@ -40,6 +42,7 @@ data class Config(
             return Config(
                 bind = value("bind") ?: d.bind,
                 dbUri = value("db_uri") ?: d.dbUri,
+                clickhouseUri = value("clickhouse_uri") ?: d.clickhouseUri,
                 jwtKey = value("jwt_key") ?: d.jwtKey,
                 logLevel = value("log_level") ?: d.logLevel,
                 pathPrefix = value("path_prefix")?.let { toPathPrefix(it) } ?: d.pathPrefix,

@@ -70,6 +70,7 @@ Set with `TIMETAGGER_<NAME>` environment variables or `--<name>=<value>` argumen
 |---|---|---|
 | `bind` | `127.0.0.1:8080` | address and port |
 | `db_uri` | (required) | `postgresql://user:pass@host:5432/db` |
+| `clickhouse_uri` | (off) | `http://user:pass@host:8123/db` — where Mac app usage (`/api/v1/usage`) is stored; the server creates the `app_usage` table |
 | `jwt_key` | ephemeral | access-token signing secret; without it access tokens die on restart (clients refresh) |
 | `log_level` | `info` | |
 | `path_prefix` | `/timetagger/` | served there as well as at the root |
