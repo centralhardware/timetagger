@@ -1,6 +1,6 @@
 cask "timetaggerbar" do
-  version "0.8.4"
-  sha256 "da5f77e6d582a82261597b405e40e8c475c874b34527ed955098eeb99c9b7141"
+  version "0.8.5"
+  sha256 "191cbea593cb30fa0d7e155cbad7abfe85886959b0b249de13ef9884b7e0f950"
 
   url "https://github.com/centralhardware/timetagger/releases/download/macos-v#{version}/TimeTaggerBar-#{version}.dmg"
   name "TimeTaggerBar"
