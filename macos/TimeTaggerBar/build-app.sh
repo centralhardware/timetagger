@@ -2,7 +2,7 @@
 # Builds TimeTaggerBar.app (a menu-bar-only app) into ./build.
 set -e
 cd "$(dirname "$0")"
-VERSION=${VERSION:-0.8.4}
+VERSION=${VERSION:-0.8.5}
 swift build -c release --arch arm64
 BIN=$(swift build -c release --arch arm64 --show-bin-path)/TimeTaggerBar
 APP=build/TimeTaggerBar.app

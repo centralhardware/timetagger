@@ -609,7 +609,8 @@ struct TimePicker: View {
                     .frame(width: 120)
                     .focused($focused)
                     .onSubmit { if commit() { open = false } }
-                    .onChange(of: text) { _ in invalid = false }
+                    // Applied as typed, so Save in the editor never sees the old time.
+                    .onChange(of: text) { _ in invalid = false; applyTyped() }
                     .overlay(RoundedRectangle(cornerRadius: 5).stroke(.red, lineWidth: invalid ? 1 : 0))
                 HStack(spacing: 4) {
                     ForEach([-15, -5, 5, 15], id: \.self) { m in
@@ -640,6 +641,14 @@ struct TimePicker: View {
 
     private func shiftDays(_ n: Int) {
         if let d = Calendar.current.date(byAdding: .day, value: n, to: time) { set(d) }
+    }
+
+    /// Moves the time to what is typed so far, when it reads as a time; the text is left alone.
+    private func applyTyped() {
+        guard let hm = Self.parse(text),
+              let d = Calendar.current.date(bySettingHour: hm.0, minute: hm.1, second: 0, of: time) else { return }
+        let capped = latest.map { min(d, $0) } ?? d
+        if capped != time { time = capped }
     }
 
     /// Applies the typed time to the current day. False (and a red outline) when it can't be read.
