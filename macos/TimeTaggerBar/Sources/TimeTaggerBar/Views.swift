@@ -3,6 +3,9 @@ import ServiceManagement
 import SwiftUI
 
 struct MenuView: View {
+    /// Left column, divider, history.
+    static let size = CGSize(width: 320 + 1 + 340, height: 480)
+
     @EnvironmentObject var store: Store
     @State private var draft = ""
     @FocusState private var fieldFocused: Bool
@@ -60,7 +63,7 @@ struct MenuView: View {
                 .padding(.vertical, 8)
                 .frame(width: 340)
         }
-        .frame(height: 480)
+        .frame(width: Self.size.width, height: Self.size.height)
         // Opening the popover puts the cursor in the task field: type and press Return.
         .onAppear { if store.running.isEmpty { fieldFocused = true } }
         // Reload whenever the store has refreshed (a write here or anywhere else).
