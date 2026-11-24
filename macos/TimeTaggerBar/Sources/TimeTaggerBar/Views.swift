@@ -264,6 +264,13 @@ struct MenuView: View {
             }
             .font(.caption).foregroundStyle(.secondary).monospacedDigit()
             taskField("What are you working on?", icon: nil)
+            let e = QuickEntry.parse(draft)
+            if !e.isEmpty, e.start == nil, let end = store.previousEnd() {
+                Button("Start from \(store.clock(end))") { startDraft(at: end) }
+                    .controlSize(.small)
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .help("Start at the end of the previous record (⌘Return)")
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -277,7 +284,7 @@ struct MenuView: View {
                 TextField(prompt, text: $draft)
                     .textFieldStyle(.plain)
                     .focused($fieldFocused)
-                    .onSubmit(startDraft)
+                    .onSubmit { startDraft() }
             }
             .padding(.horizontal, 8)
             .frame(height: 28)
@@ -296,12 +303,12 @@ struct MenuView: View {
     }
 
     /// Return in an empty field does nothing rather than log a blank "Untitled" record.
-    private func startDraft() {
+    private func startDraft(at: Int? = nil) {
         let e = QuickEntry.parse(draft)
         guard !e.isEmpty else { return }
         draft = ""
         switching = false
-        Task { await store.start(e.ds, ticket: e.ticket, tags: e.tags, at: e.start) }
+        Task { await store.start(e.ds, ticket: e.ticket, tags: e.tags, at: at ?? e.start) }
     }
 
     /// A day's time per tag, biggest first; a record with several tags counts toward each.
@@ -492,7 +499,7 @@ struct InlineEditor: View {
             }
             HashSuggestions(text: $text, tags: store.tags)
             HStack(spacing: 8) {
-                TimeRow(label: "Start", time: $start, showsDate: true)
+                TimeRow(label: "Start", time: $start, showsDate: true, previousEnd: store.previousEnd(before: original))
                 Spacer()
                 if canRun { Toggle("Running", isOn: $running).toggleStyle(.checkbox) }
             }
@@ -560,11 +567,12 @@ struct TimeRow: View {
     let label: String
     @Binding var time: Date
     var showsDate = false
+    var previousEnd: Int? = nil
 
     var body: some View {
         HStack(spacing: 6) {
             Text(label).foregroundStyle(.secondary).frame(width: 36, alignment: .leading)
-            TimePicker(time: $time, showsDate: showsDate)
+            TimePicker(time: $time, showsDate: showsDate, previousEnd: previousEnd)
         }
     }
 }
@@ -575,6 +583,8 @@ struct TimePicker: View {
     @Binding var time: Date
     var latest: Date? = nil
     var showsDate = false
+    /// Offered as a one-click value for a start time.
+    var previousEnd: Int? = nil
     @State private var open = false
     @State private var text = ""
     @State private var invalid = false
@@ -623,6 +633,15 @@ struct TimePicker: View {
                 }
                 .controlSize(.small)
                 .monospacedDigit()
+                if let end = previousEnd {
+                    let date = Date(timeIntervalSince1970: TimeInterval(end))
+                    Button { set(date) } label: {
+                        Text("Previous end ") + Text(date, format: .dateTime.hour().minute())
+                    }
+                    .controlSize(.small)
+                    .monospacedDigit()
+                    .help("Start when the previous record ended")
+                }
             }
             .padding(12)
             .onAppear { sync(); focused = true }
@@ -648,10 +667,17 @@ struct TimePicker: View {
 
     /// Moves the time to what is typed so far, when it reads as a time; the text is left alone.
     private func applyTyped() {
-        guard let hm = Self.parse(text),
+        guard let hm = Self.parse(text), !shows(hm),
               let d = Calendar.current.date(bySettingHour: hm.0, minute: hm.1, second: 0, of: time) else { return }
         let capped = latest.map { min(d, $0) } ?? d
         if capped != time { time = capped }
+    }
+
+    /// Whether `time` already reads as this hh:mm; then its seconds are kept, so a start set
+    /// to the previous end doesn't slip under it.
+    private func shows(_ hm: (Int, Int)) -> Bool {
+        let c = Calendar.current.dateComponents([.hour, .minute], from: time)
+        return c.hour == hm.0 && c.minute == hm.1
     }
 
     /// Applies the typed time to the current day. False (and a red outline) when it can't be read.
@@ -659,7 +685,7 @@ struct TimePicker: View {
     private func commit() -> Bool {
         guard let hm = Self.parse(text) else { invalid = true; return false }
         let cal = Calendar.current
-        if let d = cal.date(bySettingHour: hm.0, minute: hm.1, second: 0, of: time), d != time { set(d) } else { sync() }
+        if !shows(hm), let d = cal.date(bySettingHour: hm.0, minute: hm.1, second: 0, of: time), d != time { set(d) } else { sync() }
         return true
     }
 
@@ -1284,7 +1310,7 @@ struct RunningStart: View {
     @State private var start = Date()
 
     var body: some View {
-        TimePicker(time: $start, latest: Date())
+        TimePicker(time: $start, latest: Date(), previousEnd: store.previousEnd(before: record))
             .help("Change the start time")
             .onAppear { start = Date(timeIntervalSince1970: TimeInterval(record.t1)) }
             .onChange(of: record.t1) { t in start = Date(timeIntervalSince1970: TimeInterval(t)) }
