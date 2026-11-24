@@ -414,6 +414,23 @@ final class Store: ObservableObject {
         return out
     }
 
+    /// When the record before `record` (nil: before a new one) ended, if that was within the
+    /// last 12 hours: further back is another day, not a gap to close.
+    func previousEnd(before record: Record? = nil) -> Int? {
+        let others = (lately + records).filter { !$0.isDeleted && !$0.isRunning && $0.key != record?.key }
+        let anchor: Int
+        let ends: [Int]
+        if let r = record, !r.isRunning {
+            anchor = r.t1
+            ends = others.filter { $0.t1 < r.t1 && $0.t2 < r.t2 }.map(\.t2)
+        } else {
+            anchor = record?.t1 ?? now
+            ends = others.map(\.t2).filter { $0 < now }
+        }
+        guard let end = ends.max(), anchor - end < 12 * 3600 else { return nil }
+        return end
+    }
+
     /// Closes a gap or removes an overlap by moving the earlier record's end to `t`.
     func setEnd(_ record: Record, to t: Int) async {
         var r = record
