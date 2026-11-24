@@ -42,7 +42,12 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
         popover.behavior = .transient
         popover.animates = false
         popover.delegate = self
-        popover.contentViewController = NSHostingController(rootView: MenuView().environmentObject(store))
+        // The size is fixed up front: AppKit places the popover by the size it knows when
+        // showing, and one that grows afterwards can run past the screen's right edge.
+        let menu = NSHostingController(rootView: MenuView().environmentObject(store))
+        menu.sizingOptions = []
+        popover.contentViewController = menu
+        popover.contentSize = MenuView.size
 
         hotKey = HotKey(keyCode: kVK_ANSI_T, modifiers: cmdKey | optionKey) { [weak self] in self?.toggle() }
 
@@ -64,6 +69,7 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
 
     @objc private func toggle() {
         if let window {
+            keepOnScreen(window)
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
         } else if popover.isShown {
@@ -72,9 +78,21 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
             return
         } else if let button = item.button {
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            popover.contentViewController?.view.window?.makeKey()
+            if let shown = popover.contentViewController?.view.window {
+                keepOnScreen(shown, on: button.window?.screen)
+                shown.makeKey()
+            }
             NSApp.activate(ignoringOtherApps: true)
         }
+    }
+
+    /// Moves a window that hangs over an edge of its screen back inside it.
+    private func keepOnScreen(_ w: NSWindow, on screen: NSScreen? = nil) {
+        guard let area = (screen ?? w.screen ?? NSScreen.main)?.visibleFrame else { return }
+        var f = w.frame
+        f.origin.x = max(area.minX, min(f.origin.x, area.maxX - f.width))
+        f.origin.y = max(area.minY, min(f.origin.y, area.maxY - f.height))
+        if f.origin != w.frame.origin { w.setFrameOrigin(f.origin) }
     }
 
     func popoverDidClose(_ notification: Notification) {
@@ -116,6 +134,7 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
         w.delegate = self
         w.contentView = blur
         w.setFrame(frame, display: true)
+        keepOnScreen(w)
         w.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         window = w
@@ -123,6 +142,11 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
         if dragging, let event = NSApp.currentEvent, event.type == .leftMouseDragged || event.type == .leftMouseDown {
             w.performDrag(with: event)
         }
+    }
+
+    /// A display unplugged or rearranged must not leave the torn-off window cut off.
+    func applicationDidChangeScreenParameters(_ notification: Notification) {
+        if let window { keepOnScreen(window) }
     }
 
     /// Closing the torn-off window brings back the usual popover on the next click.
